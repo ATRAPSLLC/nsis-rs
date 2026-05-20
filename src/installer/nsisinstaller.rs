@@ -12,6 +12,7 @@ use crate::{
         analysis::{ExecIter, PluginCallIter, RegistryIter, ShortcutIter, UninstallerIter},
         callback::Callback,
         files::FileIter,
+        script::ScriptAnalysis,
     },
     nsis::{
         entry::{Entry, EntryIter},
@@ -19,7 +20,7 @@ use crate::{
         page::PageIter,
         section::{Section, SectionIter},
     },
-    opcode::{self, NsisVersion, ParkSubVersion},
+    opcode::{self, NsisVersion, ParkSubVersion, info::ParamType},
     strings::{self, NsisString, StringEncoding},
 };
 
@@ -499,6 +500,271 @@ impl<'a> NsisInstaller<'a> {
         crate::opcode::lookup_normalized(self.version, which as u32, self.park_sub)
     }
 
+    /// Formats an entry as a single script-like line.
+    ///
+    /// This resolves the opcode mnemonic and formats each known parameter using
+    /// the opcode metadata. It also handles opcodes whose parameter meaning is
+    /// conditional, such as [`opcode::EW_PUSHPOP`].
+    ///
+    /// # Arguments
+    ///
+    /// * `entry` - An entry returned by [`entries`](Self::entries),
+    ///   [`section_entries`](Self::section_entries), or another crate API.
+    ///
+    /// # Returns
+    ///
+    /// A stable, diagnostic string containing the `EW_*` mnemonic and decoded
+    /// operands. Unknown opcodes are rendered as `"???"` plus the raw opcode.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let bytes = std::fs::read("installer.exe").unwrap();
+    /// # let installer = nsis::NsisInstaller::from_bytes(&bytes).unwrap();
+    /// for entry in installer.entries() {
+    ///     let entry = entry.unwrap();
+    ///     println!("{}", installer.format_entry(&entry));
+    /// }
+    /// ```
+    pub fn format_entry(&self, entry: &Entry<'_>) -> String {
+        let mnemonic = self
+            .resolve_opcode(entry.which())
+            .map(|info| info.mnemonic)
+            .unwrap_or("???");
+        let params = self.format_entry_params(entry);
+        if params.is_empty() {
+            mnemonic.to_string()
+        } else {
+            format!("{mnemonic} {params}")
+        }
+    }
+
+    /// Formats the parameters for an entry using opcode-aware resolution.
+    ///
+    /// String offsets are decoded through the installer string table,
+    /// variables are rendered with conventional NSIS names, jump targets are
+    /// marked with `=>`, and unused operands are omitted.
+    ///
+    /// # Arguments
+    ///
+    /// * `entry` - The entry whose parameter slots should be formatted.
+    ///
+    /// # Returns
+    ///
+    /// A comma-separated operand string without the opcode mnemonic. Returns an
+    /// empty string for opcodes with no meaningful operands.
+    pub fn format_entry_params(&self, entry: &Entry<'_>) -> String {
+        let Some(info) = self.resolve_opcode(entry.which()) else {
+            return format!("which={}", entry.which());
+        };
+
+        if entry.which() == opcode::EW_PUSHPOP {
+            return self.format_pushpop_params(entry);
+        }
+
+        let offsets = entry.offsets();
+        let count = info.param_count as usize;
+        if count == 0 {
+            return String::new();
+        }
+
+        let mut parts = Vec::new();
+        for (i, ((&val, &name), &ptype)) in offsets
+            .iter()
+            .zip(info.param_names.iter())
+            .zip(info.param_types.iter())
+            .take(count)
+            .enumerate()
+        {
+            match ptype {
+                ParamType::String => parts.push(format_param(name, self.format_string_param(val))),
+                ParamType::Variable => {
+                    parts.push(format_param(name, format_variable_param(val)));
+                }
+                ParamType::Jump => {
+                    if val != 0 {
+                        if name.is_empty() {
+                            parts.push(format!("=>{val}"));
+                        } else {
+                            parts.push(format!("{name}=>{val}"));
+                        }
+                    }
+                }
+                ParamType::Int => {
+                    if val != 0 || i < count.min(2) {
+                        parts.push(format_param(name, val.to_string()));
+                    }
+                }
+                ParamType::Unused => {}
+            }
+        }
+        parts.join(", ")
+    }
+
+    /// Formats an entry as a single script-like line with analysis symbols.
+    ///
+    /// Jump and call operands that target known entries are annotated with the
+    /// best symbol from [`ScriptAnalysis`], such as a callback, section, label,
+    /// or discovered function name.
+    ///
+    /// # Arguments
+    ///
+    /// * `entry` - The entry to format.
+    /// * `analysis` - A script analysis produced by
+    ///   [`script_analysis`](Self::script_analysis) for the same installer.
+    ///
+    /// # Returns
+    ///
+    /// A single-line mnemonic plus operand string. Static jump/call targets are
+    /// rendered with symbols where available, for example
+    /// `jump_addr=>label_42(@42)`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let bytes = std::fs::read("installer.exe").unwrap();
+    /// # let installer = nsis::NsisInstaller::from_bytes(&bytes).unwrap();
+    /// let analysis = installer.script_analysis().unwrap();
+    /// for entry in installer.entries() {
+    ///     let entry = entry.unwrap();
+    ///     println!("{}", installer.format_entry_with_analysis(&entry, &analysis));
+    /// }
+    /// ```
+    pub fn format_entry_with_analysis(
+        &self,
+        entry: &Entry<'_>,
+        analysis: &ScriptAnalysis,
+    ) -> String {
+        let mnemonic = self
+            .resolve_opcode(entry.which())
+            .map(|info| info.mnemonic)
+            .unwrap_or("???");
+        let params = self.format_entry_params_with_analysis(entry, analysis);
+        if params.is_empty() {
+            mnemonic.to_string()
+        } else {
+            format!("{mnemonic} {params}")
+        }
+    }
+
+    /// Formats entry parameters with control-flow symbols from an analysis.
+    ///
+    /// # Arguments
+    ///
+    /// * `entry` - The entry whose parameters should be formatted.
+    /// * `analysis` - A script analysis produced by
+    ///   [`script_analysis`](Self::script_analysis) for the same installer.
+    ///
+    /// # Returns
+    ///
+    /// A comma-separated operand string without the opcode mnemonic. Static
+    /// jump/call targets are annotated with symbols when the analysis knows
+    /// one.
+    pub fn format_entry_params_with_analysis(
+        &self,
+        entry: &Entry<'_>,
+        analysis: &ScriptAnalysis,
+    ) -> String {
+        let Some(info) = self.resolve_opcode(entry.which()) else {
+            return format!("which={}", entry.which());
+        };
+
+        if entry.which() == opcode::EW_PUSHPOP {
+            return self.format_pushpop_params(entry);
+        }
+
+        let offsets = entry.offsets();
+        let count = info.param_count as usize;
+        if count == 0 {
+            return String::new();
+        }
+
+        let mut parts = Vec::new();
+        for (i, ((&val, &name), &ptype)) in offsets
+            .iter()
+            .zip(info.param_names.iter())
+            .zip(info.param_types.iter())
+            .take(count)
+            .enumerate()
+        {
+            match ptype {
+                ParamType::String => parts.push(format_param(name, self.format_string_param(val))),
+                ParamType::Variable => {
+                    parts.push(format_param(name, format_variable_param(val)));
+                }
+                ParamType::Jump => {
+                    if val != 0 {
+                        parts.push(format_symbolic_jump_param(name, val, analysis));
+                    }
+                }
+                ParamType::Int => {
+                    if val != 0 || i < count.min(2) {
+                        parts.push(format_param(name, val.to_string()));
+                    }
+                }
+                ParamType::Unused => {}
+            }
+        }
+        parts.join(", ")
+    }
+
+    /// Builds a script-level control-flow analysis.
+    ///
+    /// The analysis identifies section/callback/page/function roots, basic
+    /// blocks, and static or dynamic control-flow edges.
+    ///
+    /// # Returns
+    ///
+    /// A [`ScriptAnalysis`] containing owned graph data. The result does not
+    /// borrow entries, so consumers can serialize or cache it independently of
+    /// entry iterator lifetimes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if an entry, section, or page structure fails to parse
+    /// while collecting roots and control-flow edges.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let bytes = std::fs::read("installer.exe").unwrap();
+    /// # let installer = nsis::NsisInstaller::from_bytes(&bytes).unwrap();
+    /// let analysis = installer.script_analysis().unwrap();
+    /// for edge in &analysis.edges {
+    ///     println!("{:?} -> {:?}", edge.kind, edge.target);
+    /// }
+    /// ```
+    pub fn script_analysis(&self) -> Result<ScriptAnalysis, Error> {
+        crate::installer::script::analyze(self)
+    }
+
+    fn format_pushpop_params(&self, entry: &Entry<'_>) -> String {
+        let offsets = entry.offsets();
+        if offsets[2] != 0 {
+            if offsets[2] == 1 {
+                "op=Exch".to_string()
+            } else {
+                format!("op=Exch, index={}", offsets[2])
+            }
+        } else if offsets[1] != 0 {
+            format!("op=Pop, var={}", format_variable_param(offsets[0]))
+        } else {
+            format!("op=Push, value={}", self.format_string_param(offsets[0]))
+        }
+    }
+
+    fn format_string_param(&self, offset: i32) -> String {
+        if offset > 0
+            && let Ok(value) = self.read_string(offset)
+        {
+            let value = value.to_string();
+            if !value.is_empty() {
+                return format!("{value:?}");
+            }
+        }
+        offset.to_string()
+    }
+
     /// Returns the data block offset within the original file (non-solid only).
     #[inline]
     pub fn data_block_offset(&self) -> usize {
@@ -688,5 +954,52 @@ impl<'a> NsisInstaller<'a> {
     fn make_entry_iter(&self) -> EntryIter<'_> {
         let (_, count) = self.block_info(BlockType::Entries);
         EntryIter::new(self.block_data(BlockType::Entries), count.max(0) as usize)
+    }
+}
+
+fn format_param(name: &str, value: String) -> String {
+    if name.is_empty() {
+        value
+    } else {
+        format!("{name}={value}")
+    }
+}
+
+fn format_variable_param(index: i32) -> String {
+    if index >= 0 {
+        strings::variable_name(index as u16).into_owned()
+    } else {
+        index.to_string()
+    }
+}
+
+fn format_symbolic_jump_param(name: &str, raw: i32, analysis: &ScriptAnalysis) -> String {
+    let value = if raw > 0 {
+        let target = usize::try_from(raw)
+            .ok()
+            .and_then(|value| value.checked_sub(1));
+        match target {
+            Some(entry) => match analysis.symbol_for_entry(entry) {
+                Some(symbol) => format!("=>{symbol}(@{entry})"),
+                None => format!("=>@{entry}"),
+            },
+            None => format!("=>invalid({raw})"),
+        }
+    } else if raw < 0 {
+        let variable = i64::from(raw)
+            .checked_neg()
+            .and_then(|value| value.checked_sub(1));
+        match variable.and_then(|value| i32::try_from(value).ok()) {
+            Some(index) => format!("=>{}", format_variable_param(index)),
+            None => format!("=>invalid({raw})"),
+        }
+    } else {
+        "0".to_string()
+    };
+
+    if name.is_empty() {
+        value
+    } else {
+        format!("{name}{value}")
     }
 }

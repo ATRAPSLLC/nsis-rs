@@ -166,6 +166,33 @@ fn full_featured_uninstaller() {
 }
 
 #[test]
+fn uninstaller_registry_delete_uses_correct_param_layout() {
+    let inst = parse_fixture("full_featured.exe");
+    let uninstaller = inst.uninstallers().next().unwrap().unwrap();
+    let data = uninstaller.decompress().unwrap();
+    let uninst = NsisInstaller::from_bytes(&data).unwrap();
+
+    let deletes: Vec<_> = uninst
+        .registry_ops()
+        .filter_map(|op| match op.ok()? {
+            nsis::RegistryOp::Delete(delete) => Some((
+                delete.root_name(),
+                delete.key().ok()?.to_string(),
+                delete.value_name().ok()?.to_string(),
+            )),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        deletes.iter().any(|(root, key, value)| {
+            *root == "HKLM" && key == "Software\\FullFeaturedTest" && value.is_empty()
+        }),
+        "DeleteRegKey should read root from param1 and key from param2"
+    );
+}
+
+#[test]
 fn file_extraction_nonsolid() {
     let inst = parse_fixture("deflate_nonsolid.exe");
     let mut count = 0;
@@ -230,6 +257,127 @@ fn opcode_resolution() {
         }
     }
     assert!(resolved > 0, "no opcodes resolved");
+}
+
+#[test]
+fn script_formatting_uses_opcode_aware_param_types() {
+    let inst = parse_fixture("full_featured.exe");
+    let lines: Vec<_> = inst
+        .entries()
+        .map(|entry| inst.format_entry(&entry.unwrap()))
+        .collect();
+
+    assert!(
+        lines.iter().any(|line| {
+            line.starts_with("EW_GETDLGITEM ")
+                && line.contains("dialog=\"$HWNDPARENT\"")
+                && line.contains("item_id=\"1037\"")
+        }),
+        "GetDlgItem should render dialog and item id as strings"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("EW_SETCTLCOLORS ") && line.contains("hwnd=\"$_0_\"")),
+        "SetCtlColors hwnd should render as a string parameter"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("$_65503_") && !line.contains("==>")),
+        "formatting should not wrap negative output vars or duplicate jump separators"
+    );
+}
+
+#[test]
+fn script_analysis_builds_roots_blocks_and_edges() {
+    let inst = parse_fixture("full_featured.exe");
+    let analysis = inst.script_analysis().unwrap();
+
+    assert_eq!(analysis.entry_count, inst.entry_count());
+    assert!(!analysis.roots.is_empty(), "should discover script roots");
+    assert!(
+        analysis
+            .roots
+            .iter()
+            .any(|root| matches!(root.kind, nsis::ScriptRootKind::Callback { .. })),
+        "should include callback roots"
+    );
+    assert!(
+        analysis
+            .roots
+            .iter()
+            .any(|root| matches!(root.kind, nsis::ScriptRootKind::Section { index: 0 })),
+        "should include section roots"
+    );
+    assert!(!analysis.blocks.is_empty(), "should build basic blocks");
+    assert!(
+        analysis
+            .edges
+            .iter()
+            .any(|edge| matches!(edge.kind, nsis::EdgeKind::Return)),
+        "should include return edges"
+    );
+    assert!(
+        analysis
+            .edges
+            .iter()
+            .any(|edge| matches!(edge.kind, nsis::EdgeKind::Branch { .. })),
+        "should include branch edges"
+    );
+    assert_eq!(
+        analysis.entry_to_block.len(),
+        analysis.entry_count,
+        "entry-to-block map should cover all entries"
+    );
+    let block = analysis
+        .block_for_entry(49)
+        .expect("entry 49 should be in a block");
+    assert!(
+        analysis
+            .outgoing_edges(block.id)
+            .any(|edge| matches!(edge.kind, nsis::EdgeKind::Branch { .. })),
+        "entry 49's block should have a branch edge"
+    );
+    assert!(
+        analysis
+            .function_for_entry(81)
+            .map(|function| function.name.as_str())
+            == Some("section_0"),
+        "section body should be assigned to section_0"
+    );
+    assert!(
+        analysis
+            .roots_for_entry(79)
+            .any(|root| matches!(root.kind, nsis::ScriptRootKind::Callback { .. })),
+        "entry 79 should have a callback root"
+    );
+}
+
+#[test]
+fn symbolic_formatting_uses_script_analysis_symbols() {
+    let inst = parse_fixture("full_featured.exe");
+    let analysis = inst.script_analysis().unwrap();
+
+    let mut saw_symbolic_target = false;
+    for (index, entry) in inst.entries().enumerate() {
+        let entry = entry.unwrap();
+        let line = inst.format_entry_with_analysis(&entry, &analysis);
+        if line.contains("=>") && line.contains("(@") {
+            saw_symbolic_target = true;
+        }
+        if index == 49 {
+            assert!(
+                line.contains("=>") && !line.contains("==>"),
+                "symbolic formatting should preserve jump syntax"
+            );
+        }
+    }
+
+    assert!(
+        saw_symbolic_target,
+        "should render at least one symbolic target"
+    );
 }
 
 #[test]

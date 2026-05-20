@@ -283,12 +283,16 @@ fn main() {
     println!();
 
     println!("Script:");
+    let script_analysis = installer.script_analysis().ok();
     for (i, entry) in installer.entries().enumerate() {
         match entry {
             Ok(e) => {
                 let info = installer.resolve_opcode(e.which());
                 let mnemonic = info.map(|o| o.mnemonic).unwrap_or("???");
-                let detail = format_entry_params(&installer, &e, info);
+                let detail = script_analysis
+                    .as_ref()
+                    .map(|analysis| installer.format_entry_params_with_analysis(&e, analysis))
+                    .unwrap_or_else(|| installer.format_entry_params(&e));
                 println!("  {i:5}: {mnemonic:<25} {detail}");
             }
             Err(e) => println!("  {i:5}: <error: {e}>"),
@@ -389,61 +393,4 @@ fn resolve_str(installer: &nsis::NsisInstaller<'_>, offset: i32) -> String {
         .read_string(offset)
         .map(|s| s.to_string())
         .unwrap_or_default()
-}
-
-/// Format entry parameters using the opcode's `param_types` for correct resolution.
-fn format_entry_params(
-    installer: &nsis::NsisInstaller<'_>,
-    entry: &nsis::nsis::Entry<'_>,
-    info: Option<&nsis::opcode::OpcodeInfo>,
-) -> String {
-    use nsis::opcode::info::ParamType;
-
-    let Some(info) = info else {
-        return format!("which={}", entry.which());
-    };
-
-    let offsets = entry.offsets();
-    let count = info.param_count as usize;
-    if count == 0 {
-        return String::new();
-    }
-
-    let mut parts = Vec::new();
-    for (i, ((&val, &pname), &ptype)) in offsets
-        .iter()
-        .zip(info.param_names.iter())
-        .zip(info.param_types.iter())
-        .take(count)
-        .enumerate()
-    {
-        match ptype {
-            ParamType::String => {
-                if val > 0 {
-                    let resolved = resolve_str(installer, val);
-                    if !resolved.is_empty() {
-                        parts.push(format!("{pname}={resolved:?}"));
-                        continue;
-                    }
-                }
-                parts.push(format!("{pname}={val}"));
-            }
-            ParamType::Variable => {
-                let name = nsis::strings::variable_name(val as u16);
-                parts.push(format!("{pname}={name}"));
-            }
-            ParamType::Jump => {
-                if val != 0 {
-                    parts.push(format!("{pname}=>{val}"));
-                }
-            }
-            ParamType::Int => {
-                if val != 0 || i < count.min(2) {
-                    parts.push(format!("{pname}={val}"));
-                }
-            }
-            ParamType::Unused => {}
-        }
-    }
-    parts.join(", ")
 }

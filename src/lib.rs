@@ -70,8 +70,10 @@ mod util;
 
 pub use error::Error;
 pub use installer::{
-    Callback, ExecCommand, ExecIter, ExecOp, ExtractedFile, FileIter, NsisInstaller, PluginCall,
+    BasicBlock, BranchCondition, Callback, ControlFlowEdge, ControlFlowTarget, EdgeKind,
+    ExecCommand, ExecIter, ExecOp, ExtractedFile, FileIter, NsisInstaller, PageHandler, PluginCall,
     PluginCallIter, RegDelete, RegRead, RegValueType, RegWrite, RegistryIter, RegistryOp,
+    ScriptAnalysis, ScriptAnalysisDiagnostic, ScriptFunction, ScriptRoot, ScriptRootKind,
     ShellExecOp, Shortcut, ShortcutIter, Uninstaller, UninstallerIter,
 };
 pub use opcode::{

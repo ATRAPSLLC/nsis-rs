@@ -249,11 +249,11 @@ impl<'a> ExecOp<'a> {
 /// `ExecShell "open" "http://example.com"`
 ///
 /// Parameters:
-/// - param 0: `SEE_MASK_*` flags (int)
-/// - param 1: shell verb (string, e.g., `"open"`)
-/// - param 2: file or URL (string)
-/// - param 3: parameters (string)
-/// - param 4: `SW_*` show window constant (int)
+/// - param 0: shell verb (string, e.g., `"open"`)
+/// - param 1: file or URL (string)
+/// - param 2: parameters (string)
+/// - param 3: `SW_*` show window constant (int)
+/// - param 5: optional status text (string)
 ///
 /// Source: `exec.c` case `EW_SHELLEXEC`.
 pub struct ShellExecOp<'a> {
@@ -264,17 +264,17 @@ pub struct ShellExecOp<'a> {
 impl<'a> ShellExecOp<'a> {
     /// Returns the shell verb (e.g., `"open"`, `"edit"`, `"print"`, `"runas"`).
     pub fn verb(&self) -> Result<NsisString, Error> {
-        self.installer.read_string(self.entry.offset(1))
+        self.installer.read_string(self.entry.offset(0))
     }
 
     /// Returns the file path or URL to execute.
     pub fn file(&self) -> Result<NsisString, Error> {
-        self.installer.read_string(self.entry.offset(2))
+        self.installer.read_string(self.entry.offset(1))
     }
 
     /// Returns the command-line parameters passed to the target.
     pub fn params(&self) -> Result<NsisString, Error> {
-        self.installer.read_string(self.entry.offset(3))
+        self.installer.read_string(self.entry.offset(2))
     }
 
     /// Returns the underlying [`Entry`].
@@ -372,10 +372,10 @@ impl<'a> RegWrite<'a> {
 /// - `DeleteRegValue HKCU "Software\\MyApp" "Setting"` (deletes single value)
 ///
 /// Parameters:
-/// - param 0: registry root (int, `HKEY_*` constant)
-/// - param 1: key path (string)
-/// - param 2: value name (string, empty = delete entire key)
-/// - param 3: flags (int)
+/// - param 1: registry root (int, `HKEY_*` constant)
+/// - param 2: key path (string)
+/// - param 3: value name (string, empty = delete entire key)
+/// - param 4: flags (int)
 ///
 /// Source: `exec.c` case `EW_DELREG`.
 pub struct RegDelete<'a> {
@@ -386,24 +386,24 @@ pub struct RegDelete<'a> {
 impl<'a> RegDelete<'a> {
     /// Returns the registry root as a raw `HKEY_*` constant.
     pub fn root(&self) -> i32 {
-        self.entry.offset(0)
+        self.entry.offset(1)
     }
 
     /// Returns the registry root name (e.g., `"HKLM"`, `"HKCU"`).
     pub fn root_name(&self) -> &'static str {
-        hkey_name(self.entry.offset(0))
+        hkey_name(self.entry.offset(1))
     }
 
     /// Returns the registry key path.
     pub fn key(&self) -> Result<NsisString, Error> {
-        self.installer.read_string(self.entry.offset(1))
+        self.installer.read_string(self.entry.offset(2))
     }
 
     /// Returns the value name to delete.
     ///
     /// An empty string means the entire key is deleted (`DeleteRegKey`).
     pub fn value_name(&self) -> Result<NsisString, Error> {
-        self.installer.read_string(self.entry.offset(2))
+        self.installer.read_string(self.entry.offset(3))
     }
 
     /// Returns the underlying [`Entry`].

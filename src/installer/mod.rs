@@ -13,6 +13,7 @@ pub mod analysis;
 pub mod callback;
 mod files;
 mod nsisinstaller;
+pub mod script;
 
 pub use analysis::{
     ExecCommand, ExecIter, ExecOp, PluginCall, PluginCallIter, RegDelete, RegRead, RegValueType,
@@ -22,3 +23,7 @@ pub use analysis::{
 pub use callback::Callback;
 pub use files::{ExtractedFile, FileIter};
 pub use nsisinstaller::NsisInstaller;
+pub use script::{
+    BasicBlock, BranchCondition, ControlFlowEdge, ControlFlowTarget, EdgeKind, PageHandler,
+    ScriptAnalysis, ScriptAnalysisDiagnostic, ScriptFunction, ScriptRoot, ScriptRootKind,
+};

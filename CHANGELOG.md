@@ -5,6 +5,41 @@ All notable changes to the `nsis` crate are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-20
+
+### Added
+
+- `NsisInstaller::format_entry(&Entry) -> String` for rendering an opcode
+  mnemonic plus decoded parameters as a script-like line.
+- `NsisInstaller::format_entry_params(&Entry) -> String` for consumers that
+  need reusable opcode-aware parameter formatting without reimplementing the
+  string/variable/jump decoding rules.
+- `NsisInstaller::script_analysis()` for script-level control-flow analysis,
+  including roots, functions, basic blocks, edges, entry-to-block mapping, and
+  diagnostics for invalid targets.
+- Symbol-aware formatting via `format_entry_with_analysis()` and
+  `format_entry_params_with_analysis()`, which annotate jump and call targets
+  with names from `ScriptAnalysis`.
+
+### Changed
+
+- The `dump` example now uses the crate-provided instruction formatting API.
+- The `dump` example uses script analysis symbols when rendering control-flow
+  targets.
+- Opcode metadata now matches NSIS operand layouts more closely for stack,
+  UI, execution, registry, and file I/O instructions.
+
+### Fixed
+
+- `EW_PUSHPOP` formatting now treats `param0` as a variable for `Pop` and as a
+  string for `Push`, preventing variable IDs from being decoded as offsets into
+  unrelated strings such as `ProgramFilesDir`.
+- Corrected high-level accessor layouts for `ShellExecOp` and `RegDelete`.
+- Corrected several opcode parameter layouts and types, including
+  `EW_GETFULLPATHNAME`, `EW_INTOP`, `EW_INTFMT`, `EW_FINDWINDOW`,
+  `EW_SENDMESSAGE`, `EW_GETDLGITEM`, `EW_SHELLEXEC`, `EW_DELREG`, `EW_FOPEN`,
+  `EW_FSEEK`, and `EW_FINDFIRST`.
+
 ## [0.1.2] - 2026-05-04
 
 ### Added
@@ -85,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of the `nsis` crate.
 
+[0.2.0]: https://github.com/BinFlip/nsis-rs/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/BinFlip/nsis-rs/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/BinFlip/nsis-rs/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/BinFlip/nsis-rs/releases/tag/v0.1.0
