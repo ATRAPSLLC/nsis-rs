@@ -216,6 +216,40 @@ impl<'a> ExtractedFile<'a> {
         }
         decompress::read_length_prefix(slice).ok()
     }
+
+    /// Validates that the file length prefix and payload are within the source.
+    fn validate_data_bounds(&self) -> Result<(), Error> {
+        let source = self.data_source();
+        let prefix_offset = self.source_offset();
+        let prefix_end = prefix_offset.checked_add(4).ok_or(Error::TooShort {
+            expected: usize::MAX,
+            actual: source.len(),
+            context: "file data length prefix",
+        })?;
+        let prefix = source
+            .get(prefix_offset..prefix_end)
+            .ok_or(Error::TooShort {
+                expected: prefix_end,
+                actual: source.len(),
+                context: "file data length prefix",
+            })?;
+        let (_, size) = decompress::read_length_prefix(prefix)?;
+        let payload_end = prefix_end
+            .checked_add(size as usize)
+            .ok_or(Error::TooShort {
+                expected: usize::MAX,
+                actual: source.len(),
+                context: "file data payload",
+            })?;
+        source
+            .get(prefix_end..payload_end)
+            .map(|_| ())
+            .ok_or(Error::TooShort {
+                expected: payload_end,
+                actual: source.len(),
+                context: "file data payload",
+            })
+    }
 }
 
 /// Iterator over embedded files in an NSIS installer.
@@ -242,10 +276,14 @@ impl<'a> Iterator for FileIter<'a> {
             match entry_result {
                 Ok(entry) => {
                     if self.installer.normalize_opcode(entry.which()) == opcode::EW_EXTRACTFILE {
-                        return Some(Ok(ExtractedFile {
+                        let file = ExtractedFile {
                             installer: self.installer,
                             entry,
-                        }));
+                        };
+                        if let Err(e) = file.validate_data_bounds() {
+                            return Some(Err(e));
+                        }
+                        return Some(Ok(file));
                     }
                     // Skip non-EXTRACTFILE entries.
                 }

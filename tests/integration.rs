@@ -210,6 +210,28 @@ fn file_extraction_nonsolid() {
 }
 
 #[test]
+fn file_extraction_reports_out_of_bounds_payload() {
+    let path = format!(
+        "{}/tests/fixtures/deflate_nonsolid.exe",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let mut data = std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+    let prefix_offset = {
+        let inst = NsisInstaller::from_bytes(&data).unwrap();
+        let file = inst.files().next().unwrap().unwrap();
+        inst.data_block_offset() + file.data_block_offset() as usize
+    };
+    data[prefix_offset..prefix_offset + 4].copy_from_slice(&0x7FFF_FFFFu32.to_le_bytes());
+
+    let inst = NsisInstaller::from_bytes(&data).unwrap();
+    let first_file = inst.files().next().unwrap();
+    assert!(
+        first_file.is_err(),
+        "out-of-bounds payload should not produce an empty file"
+    );
+}
+
+#[test]
 fn file_extraction_solid() {
     let inst = parse_fixture("lzma_solid.exe");
     let mut count = 0;

@@ -49,8 +49,9 @@ pub enum Error {
 
     /// No valid NSIS FirstHeader signature was found in the overlay.
     ///
-    /// The scanner checked all 512-byte aligned offsets for the
-    /// `0xDEADBEEF` + `"NullsoftInst"` magic sequence.
+    /// The scanner checked 512-byte aligned offsets first and then
+    /// non-aligned fallback offsets for a structurally usable `0xDEADBEEF` +
+    /// `"NullsoftInst"` magic sequence.
     SignatureNotFound,
 
     /// The FirstHeader flags field contains invalid bits.
@@ -133,10 +134,9 @@ impl fmt::Display for Error {
             Error::OverlayNotFound => {
                 write!(f, "no PE overlay found after the last section")
             }
-            Error::SignatureNotFound => write!(
-                f,
-                "no NSIS signature found at any 512-byte aligned overlay offset"
-            ),
+            Error::SignatureNotFound => {
+                write!(f, "no usable NSIS signature found in the PE overlay")
+            }
             Error::InvalidFirstHeaderFlags { flags } => {
                 write!(f, "invalid FirstHeader flags: 0x{flags:08X}")
             }
