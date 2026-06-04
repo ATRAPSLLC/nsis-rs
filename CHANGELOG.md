@@ -5,6 +5,55 @@ All notable changes to the `nsis` crate are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-03
+
+### Added
+
+- `NsisInstaller::builder()` returning a `NsisInstallerBuilder` for configuring
+  a parse, plus `NsisInstallerBuilder::max_decompressed_size()` to set the
+  decompression budget. `NsisInstaller::from_bytes()` is retained as a
+  convenience that parses with default limits.
+- `NsisInstaller::max_decompressed_size()` accessor and the
+  `NsisInstaller::DEFAULT_MAX_DECOMPRESSED_SIZE` constant (64 MiB).
+- `decompress::DecodeLimit`, an enum that makes the three real decode intents
+  explicit: `Exact(n)` (known size — stop at `n`, ignore trailing input),
+  `Capped(n)` (unknown size — decode to end-of-stream, error if it exceeds
+  `n`), and `Truncate(n)` (unknown size — decode to end-of-stream, stop at `n`
+  without error). Includes a `size()` accessor.
+- `Error::OutputTooLarge { limit }`, returned when a `Capped` stream would
+  expand past its budget.
+
+### Changed
+
+- **Breaking:** decompression budgets are now configurable instead of guessed.
+  The previous `max(compressed_size * 10, 64 MiB)` heuristic — used for embedded
+  files, the solid file-data stream, and uninstaller overlays — is replaced by a
+  single budget threaded from `NsisInstaller::builder().max_decompressed_size()`.
+- **Breaking:** `decompress::decompress_block` now takes a single `limit:
+  DecodeLimit` argument in place of the previous `max_output: usize` and
+  `expected_size: Option<usize>` parameters.
+- **Breaking:** `decompress::{decompress_deflate, decompress_bzip2,
+  decompress_lzma}` now take `limit: DecodeLimit` in place of their
+  `max_output` / `expected_size` parameters.
+- **Breaking:** `Error` gained the `OutputTooLarge` variant; exhaustive matches
+  on `Error` must handle it.
+- Over-budget extracted artifacts (files, uninstallers) now fail with
+  `Error::OutputTooLarge` instead of being silently truncated, so callers no
+  longer receive partial data reported as success.
+- The LZMA decoder is now bounded *during* decompression via a size-limited
+  writer rather than decoding fully and truncating afterward.
+
+### Fixed
+
+- Extract LZMA non-solid embedded files correctly. Per-file LZMA streams carry
+  no stored uncompressed size and terminate with an end-of-stream marker;
+  passing a fixed expected size made `lzma-rs` reject the marker
+  (`"Expected unpacked size of N but decompressed to M"`), so every file in
+  affected installers was dropped. Unknown-size streams now rely on the EOS
+  marker.
+- Apply the same end-of-stream fix to the uninstaller-overlay decode path,
+  which carried the identical latent defect.
+
 ## [0.2.1] - 2026-05-20
 
 ### Fixed

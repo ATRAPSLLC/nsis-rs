@@ -631,12 +631,13 @@ impl<'a> Uninstaller<'a> {
         let overlay_data = if !is_compressed {
             payload.to_vec()
         } else {
-            let max_output = (size as usize).saturating_mul(10).max(64 * 1024 * 1024);
+            // Unknown decompressed size: stream to the EOS marker, capped at the
+            // installer's budget. `None` (not a fixed size) so lzma-rs honors
+            // the EOS marker instead of rejecting it.
             decompress::decompress_block(
                 payload,
                 self.installer.compression(),
-                max_output,
-                Some(max_output),
+                decompress::DecodeLimit::Capped(self.installer.max_decompressed_size()),
             )?
         };
 

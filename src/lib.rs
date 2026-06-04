@@ -71,10 +71,10 @@ mod util;
 pub use error::Error;
 pub use installer::{
     BasicBlock, BranchCondition, Callback, ControlFlowEdge, ControlFlowTarget, EdgeKind,
-    ExecCommand, ExecIter, ExecOp, ExtractedFile, FileIter, NsisInstaller, PageHandler, PluginCall,
-    PluginCallIter, RegDelete, RegRead, RegValueType, RegWrite, RegistryIter, RegistryOp,
-    ScriptAnalysis, ScriptAnalysisDiagnostic, ScriptFunction, ScriptRoot, ScriptRootKind,
-    ShellExecOp, Shortcut, ShortcutIter, Uninstaller, UninstallerIter,
+    ExecCommand, ExecIter, ExecOp, ExtractedFile, FileIter, NsisInstaller, NsisInstallerBuilder,
+    PageHandler, PluginCall, PluginCallIter, RegDelete, RegRead, RegValueType, RegWrite,
+    RegistryIter, RegistryOp, ScriptAnalysis, ScriptAnalysisDiagnostic, ScriptFunction, ScriptRoot,
+    ScriptRootKind, ShellExecOp, Shortcut, ShortcutIter, Uninstaller, UninstallerIter,
 };
 pub use opcode::{
     EW_ABORT, EW_ASSIGNVAR, EW_BRINGTOFRONT, EW_CALL, EW_CHDETAILSVIEW, EW_COPYFILES, EW_CREATEDIR,

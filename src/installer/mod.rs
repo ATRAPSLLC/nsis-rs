@@ -22,7 +22,7 @@ pub use analysis::{
 };
 pub use callback::Callback;
 pub use files::{ExtractedFile, FileIter};
-pub use nsisinstaller::NsisInstaller;
+pub use nsisinstaller::{NsisInstaller, NsisInstallerBuilder};
 pub use script::{
     BasicBlock, BranchCondition, ControlFlowEdge, ControlFlowTarget, EdgeKind, PageHandler,
     ScriptAnalysis, ScriptAnalysisDiagnostic, ScriptFunction, ScriptRoot, ScriptRootKind,

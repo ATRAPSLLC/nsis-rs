@@ -47,7 +47,7 @@
 
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 
-use crate::error::Error;
+use crate::{decompress::DecodeLimit, error::Error};
 
 // ---------------------------------------------------------------------------
 // Constants (from bzlib.h)
@@ -247,38 +247,46 @@ struct HuffmanTables {
 ///
 /// NSIS bzip2 differs from standard bzip2: there is no `"BZh"` stream header,
 /// no per-block CRC, and a simplified block framing. The input should be the
-/// raw compressed bytes (no standard bzip2 header). Returns the decompressed
-/// data, limited to at most `max_output` bytes.
+/// raw compressed bytes (no standard bzip2 header).
 ///
 /// # Arguments
 ///
 /// - `compressed`: the raw NSIS bzip2 stream (without standard header)
-/// - `max_output`: maximum decompressed size
+/// - `limit`: how the output is bounded — see [`DecodeLimit`]
 ///
 /// # Errors
 ///
 /// Returns [`Error::DecompressionFailed`] with `method: "bzip2"` if the stream
-/// is malformed.
-pub fn decompress_bzip2(compressed: &[u8], max_output: usize) -> Result<Vec<u8>, Error> {
+/// is malformed, or [`Error::OutputTooLarge`] if a [`DecodeLimit::Capped`]
+/// stream exceeds its budget.
+pub fn decompress_bzip2(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u8>, Error> {
     // Run the decoder under `catch_unwind` so any out-of-bounds index or
     // arithmetic overflow inside the vendored algorithm surfaces as a clean
     // `DecompressionFailed` error rather than aborting the calling worker.
     // See the module-level "Lint allowlist" doc for context.
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        decompress_bzip2_inner(compressed, max_output)
+        decompress_bzip2_inner(compressed, limit)
     })) {
         Ok(result) => result,
         Err(_) => Err(fail("decoder panicked on malformed input")),
     }
 }
 
-fn decompress_bzip2_inner(compressed: &[u8], max_output: usize) -> Result<Vec<u8>, Error> {
+fn decompress_bzip2_inner(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u8>, Error> {
     if compressed.is_empty() {
         return Err(fail("empty input"));
     }
 
+    // `Exact`/`Truncate` stop cleanly at the budget and ignore the rest. `Capped`
+    // decodes one byte past the budget so an over-budget (or over-reading)
+    // stream is detected and rejected rather than silently truncated.
+    let ceiling = match limit {
+        DecodeLimit::Exact(n) | DecodeLimit::Truncate(n) => n,
+        DecodeLimit::Capped(n) => n.saturating_add(1),
+    };
+
     let mut reader = BitReader::new(compressed);
-    let mut output = Vec::with_capacity(max_output.min(BLOCK_SIZE));
+    let mut output = Vec::with_capacity(ceiling.min(BLOCK_SIZE));
 
     loop {
         // Read block header byte (0x31 = data block, 0x17 = end of stream).
@@ -293,12 +301,20 @@ fn decompress_bzip2_inner(compressed: &[u8], max_output: usize) -> Result<Vec<u8
             )));
         }
 
-        // Decompress one block and append its output.
-        decompress_block(&mut reader, &mut output, max_output)?;
+        // Decompress one block and append its output (capped at `ceiling`).
+        decompress_block(&mut reader, &mut output, ceiling)?;
 
-        if output.len() >= max_output {
-            output.truncate(max_output);
-            break;
+        if output.len() >= ceiling {
+            match limit {
+                // Bounded: we have the requested bytes; stop and ignore the rest.
+                DecodeLimit::Exact(n) | DecodeLimit::Truncate(n) => {
+                    output.truncate(n);
+                    break;
+                }
+                // Capped: filling to the sentinel means the stream is larger
+                // than the budget allows.
+                DecodeLimit::Capped(n) => return Err(Error::OutputTooLarge { limit: n }),
+            }
         }
     }
 
@@ -810,14 +826,14 @@ mod tests {
 
     #[test]
     fn empty_input_fails() {
-        let result = decompress_bzip2(&[], 1024);
+        let result = decompress_bzip2(&[], DecodeLimit::Capped(1024));
         assert!(result.is_err());
     }
 
     #[test]
     fn invalid_block_header_fails() {
         // 0xFF is not a valid block header byte.
-        let result = decompress_bzip2(&[0xFF], 1024);
+        let result = decompress_bzip2(&[0xFF], DecodeLimit::Capped(1024));
         assert!(result.is_err());
         let err = result.unwrap_err();
         match err {
@@ -832,7 +848,7 @@ mod tests {
     #[test]
     fn end_of_stream_produces_empty() {
         // 0x17 = end of stream immediately.
-        let result = decompress_bzip2(&[0x17], 1024);
+        let result = decompress_bzip2(&[0x17], DecodeLimit::Capped(1024));
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }

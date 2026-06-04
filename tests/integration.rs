@@ -11,13 +11,17 @@
     clippy::indexing_slicing
 )]
 
-use nsis::NsisInstaller;
+use nsis::{Error, NsisInstaller};
 
-fn parse_fixture(name: &str) -> NsisInstaller<'static> {
+fn fixture_bytes(name: &str) -> &'static [u8] {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
     let data = std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
-    let data: &'static [u8] = Vec::leak(data);
-    NsisInstaller::from_bytes(data).unwrap_or_else(|e| panic!("failed to parse {name}: {e}"))
+    Vec::leak(data)
+}
+
+fn parse_fixture(name: &str) -> NsisInstaller<'static> {
+    NsisInstaller::from_bytes(fixture_bytes(name))
+        .unwrap_or_else(|e| panic!("failed to parse {name}: {e}"))
 }
 
 fn validate_all_structures(inst: &NsisInstaller<'_>) {
@@ -207,6 +211,56 @@ fn file_extraction_nonsolid() {
         count += 1;
     }
     assert!(count > 0, "should find files");
+}
+
+#[test]
+fn decompression_budget_rejects_oversized_file() {
+    // With a tiny budget, every embedded file that decompresses to more than
+    // the budget must surface `OutputTooLarge` rather than truncated `Ok`.
+    // `deflate_nonsolid` has a genuinely compressed entry (`config.ini`).
+    let inst = NsisInstaller::builder(fixture_bytes("deflate_nonsolid.exe"))
+        .max_decompressed_size(8)
+        .parse()
+        .expect("header parsing is independent of the file budget");
+
+    // Compressed entries that expand past the budget must error; uncompressed
+    // (stored) entries are copied verbatim and cannot be a bomb, so they're
+    // exempt from the budget.
+    let mut saw_over_budget = false;
+    for file in inst.files() {
+        let file = file.unwrap();
+        let compressed = file.is_compressed();
+        match file.decompress() {
+            Ok(_) => {}
+            Err(Error::OutputTooLarge { limit }) => {
+                assert!(compressed, "only compressed streams are budget-capped");
+                assert_eq!(limit, 8);
+                saw_over_budget = true;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+    assert!(
+        saw_over_budget,
+        "expected at least one compressed file to exceed the 8-byte budget"
+    );
+}
+
+#[test]
+fn generous_budget_extracts_all_files() {
+    // The same fixture parses and extracts cleanly with a generous budget,
+    // confirming the budget is the only thing the tiny cap changed.
+    let inst = NsisInstaller::builder(fixture_bytes("deflate_nonsolid.exe"))
+        .max_decompressed_size(256 * 1024 * 1024)
+        .parse()
+        .unwrap();
+    let mut count = 0;
+    for file in inst.files() {
+        let content = file.unwrap().decompress().unwrap();
+        assert!(!content.is_empty());
+        count += 1;
+    }
+    assert!(count > 0);
 }
 
 #[test]

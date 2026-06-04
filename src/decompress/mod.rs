@@ -113,30 +113,67 @@ pub fn detect_compression(data: &[u8]) -> CompressionMethod {
     CompressionMethod::Deflate
 }
 
+/// How a decompressor should bound its output.
+///
+/// Replaces an ambiguous `(max_output, expected_size)` pair with the three
+/// concrete intents an NSIS decode actually needs. Each carries the byte size
+/// it is parameterized by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeLimit {
+    /// The decompressed size is known exactly: produce up to `n` bytes then
+    /// stop, ignoring any trailing input.
+    ///
+    /// Used for header blocks, whose size is recorded in the NSIS structures.
+    /// For a solid header the same stream continues with file data afterward,
+    /// so the decode must stop precisely rather than consume the remainder.
+    Exact(usize),
+    /// The size is unknown: decode to the natural end of stream; if the output
+    /// would exceed `n`, fail with [`Error::OutputTooLarge`].
+    ///
+    /// Used for extracted files and uninstaller overlays — an over-budget
+    /// artifact is rejected, never stored truncated.
+    Capped(usize),
+    /// The size is unknown: decode to the natural end of stream, but stop at
+    /// `n` bytes without error.
+    ///
+    /// Used for the solid working buffer, which is indexed by offset to slice
+    /// out individual files. Over-budget (or over-reading) streams are bounded
+    /// rather than failing the whole installer.
+    Truncate(usize),
+}
+
+impl DecodeLimit {
+    /// Returns the byte size the limit is parameterized by.
+    #[inline]
+    pub fn size(self) -> usize {
+        match self {
+            DecodeLimit::Exact(n) | DecodeLimit::Capped(n) | DecodeLimit::Truncate(n) => n,
+        }
+    }
+}
+
 /// Decompresses a single NSIS data block.
 ///
-/// The `data` should be the compressed bytes (after the 4-byte length prefix).
-/// `max_output` limits the decompressed size to prevent memory exhaustion.
+/// # Arguments
 ///
-/// For LZMA streams, `expected_size` provides the exact decompressed size.
-/// This is required for solid-mode streams where trailing data follows
-/// the LZMA end-of-stream marker. Pass `None` when the size is unknown.
+/// - `data`: the compressed bytes (after the 4-byte length prefix)
+/// - `method`: the compression algorithm to use
+/// - `limit`: how the output is bounded — see [`DecodeLimit`]
 ///
 /// # Errors
 ///
 /// Returns [`Error::DecompressionFailed`] if decompression fails, or
-/// [`Error::UnsupportedCompression`] for [`CompressionMethod::None`] when the
-/// data cannot simply be copied.
+/// [`Error::OutputTooLarge`] if a [`DecodeLimit::Capped`] stream exceeds its
+/// budget.
 pub fn decompress_block(
     data: &[u8],
     method: CompressionMethod,
-    max_output: usize,
-    expected_size: Option<usize>,
+    limit: DecodeLimit,
 ) -> Result<Vec<u8>, Error> {
     match method {
-        CompressionMethod::Deflate => deflate::decompress_deflate(data, max_output),
-        CompressionMethod::Bzip2 => bzip2::decompress_bzip2(data, max_output),
-        CompressionMethod::Lzma => lzma::decompress_lzma(data, max_output, expected_size),
+        CompressionMethod::Deflate => deflate::decompress_deflate(data, limit),
+        CompressionMethod::Bzip2 => bzip2::decompress_bzip2(data, limit),
+        CompressionMethod::Lzma => lzma::decompress_lzma(data, limit),
         CompressionMethod::None => Ok(data.to_vec()),
     }
 }
@@ -195,10 +232,15 @@ pub fn decompress_header(
     };
 
     // Try to detect and decompress with non-solid framing.
-    // In non-solid mode the length prefix cleanly frames the compressed data,
-    // so LZMA does not need a known uncompressed size.
+    //
+    // The header's decompressed size is known (`expected_size`), so we request
+    // an [`DecodeLimit::Exact`] decode: take exactly that many bytes and ignore
+    // any trailing input. Block-based codecs (deflate/bzip2) may decode a whole
+    // block that overshoots the header, and LZMA frames may carry trailing
+    // bytes after the EOS marker — an exact bound sidesteps both.
     let method = detect_compression(compressed_data);
-    if let Ok(decompressed) = decompress_block(compressed_data, method, expected_size, None)
+    if let Ok(decompressed) =
+        decompress_block(compressed_data, method, DecodeLimit::Exact(expected_size))
         && !decompressed.is_empty()
     {
         return Ok((
@@ -219,7 +261,8 @@ pub fn decompress_header(
         if m == method {
             continue;
         }
-        if let Ok(decompressed) = decompress_block(compressed_data, m, expected_size, None)
+        if let Ok(decompressed) =
+            decompress_block(compressed_data, m, DecodeLimit::Exact(expected_size))
             && !decompressed.is_empty()
         {
             return Ok((
@@ -245,7 +288,7 @@ pub fn decompress_header(
     let solid_expected = expected_size.saturating_add(4); // account for in-stream length prefix
     let solid_method = detect_compression(data);
     if let Ok(decompressed) =
-        decompress_block(data, solid_method, solid_expected, Some(solid_expected))
+        decompress_block(data, solid_method, DecodeLimit::Exact(solid_expected))
     {
         let stripped = strip_solid_prefix(decompressed)?;
         // Solid: the entire stream is one blob, no separate data block offset.
@@ -256,7 +299,7 @@ pub fn decompress_header(
         if m == solid_method {
             continue;
         }
-        if let Ok(decompressed) = decompress_block(data, m, solid_expected, Some(solid_expected)) {
+        if let Ok(decompressed) = decompress_block(data, m, DecodeLimit::Exact(solid_expected)) {
             let stripped = strip_solid_prefix(decompressed)?;
             return Ok((stripped, m, CompressionMode::Solid, 0));
         }

@@ -72,6 +72,17 @@ pub enum Error {
     /// None of the supported compression methods could decompress the data.
     UnsupportedCompression,
 
+    /// Decompression produced more output than the configured budget allows.
+    ///
+    /// Raised when a stream of unknown decompressed size (per-file, solid, or
+    /// uninstaller data) expands past the caller's `max_decompressed_size`
+    /// budget. This guards against decompression bombs; the offending stream is
+    /// rejected rather than silently truncated.
+    OutputTooLarge {
+        /// The byte budget that was exceeded.
+        limit: usize,
+    },
+
     // -- Header structure errors --
     /// A block header references an offset beyond the decompressed data.
     InvalidBlockOffset {
@@ -145,6 +156,9 @@ impl fmt::Display for Error {
             }
             Error::UnsupportedCompression => {
                 write!(f, "none of the supported compression methods succeeded")
+            }
+            Error::OutputTooLarge { limit } => {
+                write!(f, "decompressed output exceeds limit of {limit} bytes")
             }
             Error::InvalidBlockOffset { block, offset } => {
                 write!(f, "block {block}: offset 0x{offset:08X} is out of range")
@@ -239,6 +253,16 @@ mod tests {
     fn display_unsupported_compression() {
         let e = Error::UnsupportedCompression;
         assert!(e.to_string().contains("compression"));
+    }
+
+    #[test]
+    fn display_output_too_large() {
+        let e = Error::OutputTooLarge {
+            limit: 64 * 1024 * 1024,
+        };
+        let s = e.to_string();
+        assert!(s.contains("exceeds limit"));
+        assert!(s.contains(&(64 * 1024 * 1024).to_string()));
     }
 
     #[test]

@@ -163,19 +163,16 @@ impl<'a> ExtractedFile<'a> {
             return Ok(payload.to_vec());
         }
 
-        let max_output = (size as usize).saturating_mul(10).max(64 * 1024 * 1024);
-        
         // The per-file uncompressed size is unknown: the length prefix encodes
         // the *compressed* size, not the decompressed one. Passing `None` lets
-        // the decoder run to the stream's end-of-stream marker rather than
-        // demanding a fixed size. Some NSIS LZMA streams carry an EOS marker,
-        // so a fixed `Some(max_output)` made lzma-rs fail with "Expected
-        // unpacked size of <max_output> but decompressed to <actual>".
+        // the decoder run to the stream's end-of-stream marker (capped at the
+        // installer's budget) rather than demanding a fixed size — a fixed
+        // `Some(..)` made lzma-rs reject the EOS marker. Over-budget streams
+        // surface as [`Error::OutputTooLarge`] instead of silent truncation.
         decompress::decompress_block(
             payload,
             self.installer.compression(),
-            max_output,
-            None,
+            decompress::DecodeLimit::Capped(self.installer.max_decompressed_size()),
         )
     }
 

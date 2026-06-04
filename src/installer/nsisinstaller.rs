@@ -2,7 +2,7 @@
 
 use crate::{
     addressmap::PeOverlay,
-    decompress::{self, CompressionMethod, CompressionMode},
+    decompress::{self, CompressionMethod, CompressionMode, DecodeLimit},
     error::Error,
     header::{
         self, NsisVersionHint, blockheader::BlockType, commonheader::CommonHeader,
@@ -89,10 +89,59 @@ pub struct NsisInstaller<'a> {
     callbacks: [i32; 10],
     /// Park sub-version (only meaningful when `version == Park`).
     park_sub: Option<ParkSubVersion>,
+    /// Maximum decompressed size budget for unknown-size streams.
+    ///
+    /// Applied per decompression call to embedded files, the solid file-data
+    /// stream, and uninstaller overlays. A stream that would expand past this
+    /// budget is rejected with [`Error::OutputTooLarge`] rather than silently
+    /// truncated. Set via [`NsisInstaller::builder`].
+    max_decompressed_size: usize,
 }
 
 impl<'a> NsisInstaller<'a> {
-    /// Parses an NSIS installer from the given file bytes.
+    /// Default decompression budget for unknown-size streams (64 MiB).
+    ///
+    /// Used by [`from_bytes`](Self::from_bytes) and as the
+    /// [`builder`](Self::builder)'s starting value. Override per-parse with
+    /// [`NsisInstallerBuilder::max_decompressed_size`].
+    pub const DEFAULT_MAX_DECOMPRESSED_SIZE: usize = 64 * 1024 * 1024;
+
+    /// Parses an NSIS installer from the given file bytes using default limits.
+    ///
+    /// Equivalent to `NsisInstaller::builder(file).parse()`. To configure the
+    /// decompression budget, use [`builder`](Self::builder) instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any step fails (not a PE, no overlay, no NSIS
+    /// signature, decompression failure, invalid headers).
+    pub fn from_bytes(file: &'a [u8]) -> Result<Self, Error> {
+        Self::builder(file).parse()
+    }
+
+    /// Creates a [`NsisInstallerBuilder`] for parsing `file` with configurable
+    /// limits.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use nsis::NsisInstaller;
+    ///
+    /// let file = std::fs::read("installer.exe").unwrap();
+    /// let inst = NsisInstaller::builder(&file)
+    ///     .max_decompressed_size(256 * 1024 * 1024)
+    ///     .parse()
+    ///     .unwrap();
+    /// # let _ = inst.version();
+    /// ```
+    pub fn builder(file: &'a [u8]) -> NsisInstallerBuilder<'a> {
+        NsisInstallerBuilder {
+            file,
+            max_decompressed_size: Self::DEFAULT_MAX_DECOMPRESSED_SIZE,
+        }
+    }
+
+    /// Parses an NSIS installer with an explicit decompression budget.
     ///
     /// This performs the full parsing pipeline:
     /// 1. Locate PE overlay
@@ -105,7 +154,7 @@ impl<'a> NsisInstaller<'a> {
     ///
     /// Returns an error if any step fails (not a PE, no overlay, no NSIS
     /// signature, decompression failure, invalid headers).
-    pub fn from_bytes(file: &'a [u8]) -> Result<Self, Error> {
+    fn parse_with_budget(file: &'a [u8], max_decompressed_size: usize) -> Result<Self, Error> {
         // Step 1: Locate the PE overlay.
         let overlay_info = PeOverlay::from_bytes(file)?;
         let overlay = overlay_info.overlay();
@@ -248,15 +297,15 @@ impl<'a> NsisInstaller<'a> {
                 .get(..stream_len.min(after_fh.len()))
                 .unwrap_or(after_fh);
 
-            let max_decompressed = nsis_data_len
-                .max(expected_size.saturating_mul(10))
-                .max(64 * 1024 * 1024);
-
-            // Decompress the full stream. If this fails, file extraction won't
-            // work but header parsing still succeeds — we degrade gracefully.
-            let full_stream =
-                decompress::decompress_block(compressed_data, compression, max_decompressed, None)
-                    .unwrap_or_else(|_| Vec::new());
+            // Decompress the full stream under the caller's budget. If this
+            // fails (malformed or over budget), file extraction won't work but
+            // header parsing still succeeds — we degrade gracefully.
+            let full_stream = decompress::decompress_block(
+                compressed_data,
+                compression,
+                DecodeLimit::Truncate(max_decompressed_size),
+            )
+            .unwrap_or_else(|_| Vec::new());
 
             // The first 4 bytes are the header length prefix, then header_data.
             // File data starts after: 4 + header_data.len()
@@ -294,7 +343,16 @@ impl<'a> NsisInstaller<'a> {
             section_size,
             callbacks,
             park_sub,
+            max_decompressed_size,
         })
+    }
+
+    /// Returns the decompression budget for unknown-size streams.
+    ///
+    /// See [`NsisInstallerBuilder::max_decompressed_size`].
+    #[inline]
+    pub fn max_decompressed_size(&self) -> usize {
+        self.max_decompressed_size
     }
 
     /// Returns the detected NSIS version.
@@ -954,6 +1012,53 @@ impl<'a> NsisInstaller<'a> {
     fn make_entry_iter(&self) -> EntryIter<'_> {
         let (_, count) = self.block_info(BlockType::Entries);
         EntryIter::new(self.block_data(BlockType::Entries), count.max(0) as usize)
+    }
+}
+
+/// Configures and parses an [`NsisInstaller`].
+///
+/// Created via [`NsisInstaller::builder`]. Currently the only tunable is the
+/// decompression budget; additional limits can be added here without changing
+/// the [`NsisInstaller::from_bytes`] entry point.
+///
+/// # Examples
+///
+/// ```no_run
+/// use nsis::NsisInstaller;
+///
+/// let file = std::fs::read("installer.exe").unwrap();
+/// let inst = NsisInstaller::builder(&file)
+///     .max_decompressed_size(256 * 1024 * 1024)
+///     .parse()
+///     .unwrap();
+/// # let _ = inst.section_count();
+/// ```
+pub struct NsisInstallerBuilder<'a> {
+    file: &'a [u8],
+    max_decompressed_size: usize,
+}
+
+impl<'a> NsisInstallerBuilder<'a> {
+    /// Sets the maximum decompressed size for any single unknown-size stream
+    /// (embedded files, the solid file-data stream, uninstaller overlays).
+    ///
+    /// A stream that would expand past this budget is rejected with
+    /// [`Error::OutputTooLarge`] rather than silently truncated. Defaults to
+    /// [`NsisInstaller::DEFAULT_MAX_DECOMPRESSED_SIZE`].
+    #[must_use]
+    pub fn max_decompressed_size(mut self, bytes: usize) -> Self {
+        self.max_decompressed_size = bytes;
+        self
+    }
+
+    /// Parses the installer with the configured limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if parsing fails (not a PE, no overlay, no NSIS
+    /// signature, decompression failure, invalid headers).
+    pub fn parse(self) -> Result<NsisInstaller<'a>, Error> {
+        NsisInstaller::parse_with_budget(self.file, self.max_decompressed_size)
     }
 }
 
