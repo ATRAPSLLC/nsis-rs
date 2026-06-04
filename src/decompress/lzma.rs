@@ -93,4 +93,33 @@ mod tests {
         let result = decompress_lzma(&[0x5D, 0x00, 0x00], 1024, None);
         assert!(result.is_err());
     }
+
+    /// Real per-file LZMA payload from an NSIS 2 LZMA non-solid installer:
+    /// a 5-byte props header (`0x5D`, 8 MiB dict) followed by a stream that
+    /// terminates with an end-of-stream marker, decompressing to a 1430-byte
+    /// icon. NSIS non-solid streams do not store the uncompressed size, so
+    /// the decoder must rely on the EOS marker.
+    const NSIS_EOS_STREAM: &[u8] = include_bytes!("../../tests/fixtures/lzma_eos_marker_file.bin");
+
+    #[test]
+    fn eos_marker_stream_decompresses_with_unknown_size() {
+        // `None` (unknown size) lets the decoder honor the EOS marker.
+        let out = decompress_lzma(NSIS_EOS_STREAM, 64 * 1024 * 1024, None)
+            .expect("EOS-terminated stream should decode with unknown size");
+        assert_eq!(out.len(), 1430, "decompressed size should match the icon");
+        assert_eq!(&out[0..4], &[0x00, 0x00, 0x01, 0x00], "should be a valid .ico header");
+    }
+
+    #[test]
+    fn fixed_size_larger_than_actual_rejects_eos_marker() {
+        // Regression: passing a fixed expected size larger than the true output
+        // (as the file decompressor used to do with `Some(max_output)`) makes
+        // lzma-rs reject the early EOS marker. This is exactly the failure that
+        // dropped real NSIS LZMA files from extraction.
+        let result = decompress_lzma(NSIS_EOS_STREAM, 64 * 1024 * 1024, Some(64 * 1024 * 1024));
+        assert!(
+            result.is_err(),
+            "an over-large fixed size must not silently succeed on an EOS-terminated stream"
+        );
+    }
 }
