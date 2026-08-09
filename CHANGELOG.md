@@ -5,6 +5,15 @@ All notable changes to the `nsis` crate are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-08-09
+
+### Changed
+
+- Recorded ATRAPS LLC as copyright holder and added a `NOTICE` file. No functional change.
+- Dropped the deprecated `authors` field and repointed `repository` at the organisation.
+- Refreshed transitive dependencies (`cargo update`); no direct dependency changed version.
+- Publishing now uses crates.io trusted publishing instead of a stored registry token.
+
 ## [0.3.0] - 2026-06-03
 
 ### Added
@@ -178,8 +187,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of the `nsis` crate.
 
-[0.2.1]: https://github.com/BinFlip/nsis-rs/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/BinFlip/nsis-rs/compare/v0.1.2...v0.2.0
-[0.1.2]: https://github.com/BinFlip/nsis-rs/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/BinFlip/nsis-rs/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/BinFlip/nsis-rs/releases/tag/v0.1.0
+[0.3.1]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.1.2...v0.2.0
+[0.1.2]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/ATRAPSLLC/nsis-rs/releases/tag/v0.1.0
