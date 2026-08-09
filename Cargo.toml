@@ -2,11 +2,10 @@
 name = "nsis"
 version = "0.3.0"
 edition = "2024"
-authors = ["Johann Kempter <admin@binflip.rs>"]
 rust-version = "1.88"
 description = "Parse and inspect NSIS installer binaries"
 license = "Apache-2.0"
-repository = "https://github.com/BinFlip/nsis-rs"
+repository = "https://github.com/ATRAPSLLC/nsis-rs"
 readme = "README.md"
 keywords = ["nsis", "installer", "parser", "reverse-engineering", "binary-analysis"]
 categories = ["parser-implementations"]
