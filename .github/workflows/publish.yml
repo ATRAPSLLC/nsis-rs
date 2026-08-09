@@ -1,4 +1,4 @@
-name: Publish
+name: Publish to crates.io
 
 on:
   release:
@@ -7,14 +7,36 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   publish:
-    name: Publish to crates.io
+    name: Publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write        # required to mint the crates.io OIDC token
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # merge-base needs real history
+
+      # A GitHub release can be cut from any commit, including one that never
+      # landed on main. Publishing is restricted to release tags that are
+      # actually contained in main.
+      - name: Refuse releases not contained in main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main \
+            || { echo "::error::release commit $GITHUB_SHA is not contained in main"; exit 1; }
+
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
       - run: cargo publish
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
