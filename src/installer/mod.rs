@@ -16,9 +16,9 @@ mod nsisinstaller;
 pub mod script;
 
 pub use analysis::{
-    ExecCommand, ExecIter, ExecOp, PluginCall, PluginCallIter, RegDelete, RegRead, RegValueType,
-    RegWrite, RegistryIter, RegistryOp, ShellExecOp, Shortcut, ShortcutIter, Uninstaller,
-    UninstallerIter,
+    ExecCommand, ExecIter, ExecOp, Instruction, InstructionIter, PluginCall, PluginCallIter,
+    RegDelete, RegRead, RegValueType, RegWrite, RegistryIter, RegistryOp, ShellExecOp, Shortcut,
+    ShortcutIter, Uninstaller, UninstallerIter,
 };
 pub use callback::Callback;
 pub use files::{ExtractedFile, FileIter};

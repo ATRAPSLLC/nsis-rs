@@ -12,7 +12,7 @@
 )]
 
 use nsis::{
-    Error, NsisInstaller, SolidStatus,
+    Error, Instruction, NsisInstaller, SolidStatus,
     header::firstheader::FirstHeader,
     opcode::NsisVersion,
     strings::{ShellTarget, StringEncoding, StringSegment},
@@ -927,6 +927,56 @@ fn registry_backed_shell_folders_resolve() {
         common_files,
         "the CommonFiles registry lookup should resolve, not report ProgramFiles"
     );
+}
+
+#[test]
+fn one_walk_yields_what_the_typed_iterators_do() {
+    // The typed iterators are filters over `instructions()`, so a single pass
+    // must account for exactly what six passes used to. This is what keeps the
+    // filters honest as instruction kinds are added.
+    for name in [
+        "full_featured.exe",
+        "dirs_unicode_solid.exe",
+        "dirs_nsis246_ansi_solid.exe",
+        "park1_unicode.exe",
+        "nsis246_ansi_solid.exe",
+    ] {
+        let inst = parse_fixture(name);
+
+        let (mut files, mut plugins, mut execs, mut registry, mut shortcuts, mut uninstallers) =
+            (0, 0, 0, 0, 0, 0);
+        let mut total = 0;
+        for instruction in inst.instructions() {
+            total += 1;
+            match instruction.unwrap() {
+                Instruction::File(_) => files += 1,
+                Instruction::PluginCall(_) => plugins += 1,
+                Instruction::Exec(_) => execs += 1,
+                Instruction::Registry(_) => registry += 1,
+                Instruction::Shortcut(_) => shortcuts += 1,
+                Instruction::Uninstaller(_) => uninstallers += 1,
+                // `Instruction` is non-exhaustive, so a consumer always needs a
+                // catch-all; `Other` lands here alongside any future variant.
+                _ => {}
+            }
+        }
+
+        assert_eq!(total, inst.entry_count(), "{name}: every entry is visited");
+        assert_eq!(files, inst.files().count(), "{name}: files");
+        assert_eq!(plugins, inst.plugin_calls().count(), "{name}: plugin calls");
+        assert_eq!(execs, inst.exec_commands().count(), "{name}: exec commands");
+        assert_eq!(
+            registry,
+            inst.registry_ops().count(),
+            "{name}: registry ops"
+        );
+        assert_eq!(shortcuts, inst.shortcuts().count(), "{name}: shortcuts");
+        assert_eq!(
+            uninstallers,
+            inst.uninstallers().count(),
+            "{name}: uninstallers"
+        );
+    }
 }
 
 #[test]
