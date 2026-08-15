@@ -95,12 +95,21 @@ pub fn decompress_lzma(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u8>,
     };
 
     // The decoder writes into a budget-bounded sink. For the unknown-size
-    // variants lzma-rs decompresses until the EOS marker; trailing bytes after
-    // the marker (CRC, padding) make it report "Found end-of-stream marker but
-    // more bytes are available", which we treat as success.
-    let mut reader = std::io::BufReader::new(std::io::Cursor::new(&lzma_header));
-    match lzma_rs::lzma_decompress(&mut reader, &mut writer) {
-        Ok(()) => {}
+    // variants lzma-rust2 decompresses until the EOS marker (the LzmaReader
+    // consumes the LZMA alone header we built above); trailing bytes after
+    // the marker (CRC, padding) are left unread, so unlike lzma-rs there is
+    // no "more bytes are available" error to tolerate.
+    let mut reader = lzma_rust2::LzmaReader::new_mem_limit(
+        std::io::Cursor::new(&lzma_header),
+        u32::MAX,
+        None,
+    )
+    .map_err(|e| Error::DecompressionFailed {
+        method: "lzma",
+        detail: e.to_string(),
+    })?;
+    match std::io::copy(&mut reader, &mut writer) {
+        Ok(_) => {}
         Err(e) => {
             if writer.overflowed {
                 // Budget reached mid-decode: reject or keep the truncated buffer.
