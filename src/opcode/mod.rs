@@ -479,33 +479,20 @@ pub fn detect_park_sub_version(
     }
 }
 
-/// Looks up opcode metadata for the given opcode index and NSIS version.
+/// Looks up opcode metadata.
 ///
-/// Returns `None` if the opcode index is out of range for the given version.
-pub fn lookup(version: NsisVersion, which: u32) -> Option<&'static OpcodeInfo> {
-    let table: &[OpcodeInfo] = match version {
-        NsisVersion::V2 => &info::OPCODES_NSIS2,
-        NsisVersion::V3 => info::OPCODES_NSIS3,
-        NsisVersion::V1 | NsisVersion::Park => &info::OPCODES_NSIS2,
-    };
-
-    table.get(which as usize)
-}
-
-/// Looks up opcode metadata with Park-aware normalization.
+/// `which` must already be normalised into the standard layout — see
+/// [`normalize_log_opcode`] and [`normalize_park_opcode`], or
+/// [`NsisInstaller::resolve_opcode`](crate::installer::NsisInstaller::resolve_opcode),
+/// which applies whichever the installer needs.
 ///
-/// For Park version, the raw opcode is first normalized to its V2 equivalent
-/// before table lookup.
-pub fn lookup_normalized(
-    version: NsisVersion,
-    which: u32,
-    park_sub: Option<ParkSubVersion>,
-) -> Option<&'static OpcodeInfo> {
-    let normalized = match (version, park_sub) {
-        (NsisVersion::Park, Some(sub)) => normalize_park_opcode(which, sub),
-        _ => which,
-    };
-    lookup(version, normalized)
+/// Takes no version: NSIS 2 and NSIS 3 number their instructions identically,
+/// and the build-to-build differences are handled by normalisation rather than
+/// by separate tables.
+///
+/// Returns `None` if the opcode is outside the table.
+pub fn lookup(which: u32) -> Option<&'static OpcodeInfo> {
+    info::OPCODES.get(which as usize)
 }
 
 #[cfg(test)]
@@ -555,20 +542,14 @@ mod tests {
             (EW_EXTRACTFILE, [0, 2, 3, 0, 0, 0]),
             (EW_RET, [0; 6]),
         ]);
-        assert_eq!(
-            find_bad_opcode(&data, 0, 3, |raw| lookup(NsisVersion::V3, raw)),
-            None
-        );
+        assert_eq!(find_bad_opcode(&data, 0, 3, lookup), None);
     }
 
     #[test]
     fn too_many_parameters_contradicts_the_layout() {
         // `EW_RET` takes none, so an entry passing one cannot be a return.
         let data = entry_block(&[(EW_RET, [0, 0, 0, 0, 0, 7])]);
-        assert_eq!(
-            find_bad_opcode(&data, 0, 1, |raw| lookup(NsisVersion::V3, raw)),
-            Some(EW_RET as u32)
-        );
+        assert_eq!(find_bad_opcode(&data, 0, 1, lookup), Some(EW_RET as u32));
     }
 
     #[test]
@@ -577,7 +558,7 @@ mod tests {
         for slot in [EW_LOG, EW_FINDPROC] {
             let data = entry_block(&[(slot, [0; 6])]);
             assert_eq!(
-                find_bad_opcode(&data, 0, 1, |raw| lookup(NsisVersion::V3, raw)),
+                find_bad_opcode(&data, 0, 1, lookup),
                 Some(slot as u32),
                 "{slot} should not appear in a file"
             );
@@ -596,14 +577,11 @@ mod tests {
         ]);
 
         assert!(
-            find_bad_opcode(&data, 0, 2, |raw| lookup(NsisVersion::V3, raw)).is_some(),
+            find_bad_opcode(&data, 0, 2, lookup).is_some(),
             "the standard layout should not explain this block"
         );
         assert_eq!(
-            find_bad_opcode(&data, 0, 2, |raw| lookup(
-                NsisVersion::V3,
-                normalize_log_opcode(raw)
-            )),
+            find_bad_opcode(&data, 0, 2, |raw| lookup(normalize_log_opcode(raw))),
             None,
             "the log layout should explain it"
         );
@@ -710,25 +688,25 @@ mod tests {
 
     #[test]
     fn lookup_valid_opcode() {
-        let info = lookup(NsisVersion::V2, 0);
+        let info = lookup(0);
         assert!(info.is_some());
         assert_eq!(info.unwrap().mnemonic, "EW_INVALID_OPCODE");
     }
 
     #[test]
     fn lookup_ret() {
-        let info = lookup(NsisVersion::V2, 1).unwrap();
+        let info = lookup(1).unwrap();
         assert_eq!(info.mnemonic, "EW_RET");
     }
 
     #[test]
     fn lookup_out_of_range() {
-        assert!(lookup(NsisVersion::V2, 999).is_none());
+        assert!(lookup(999).is_none());
     }
 
     #[test]
     fn lookup_v3() {
-        let info = lookup(NsisVersion::V3, 0).unwrap();
+        let info = lookup(0).unwrap();
         assert_eq!(info.mnemonic, "EW_INVALID_OPCODE");
     }
 }

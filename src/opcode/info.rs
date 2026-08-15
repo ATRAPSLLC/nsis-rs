@@ -41,14 +41,25 @@ pub struct OpcodeInfo {
 
 use ParamType::{Int, Jump, String, Unused, Variable};
 
-/// NSIS 2.x opcode table.
+/// The opcode table.
 ///
-/// Indices correspond to the `which` field in entry structures.
-/// Opcode numbering follows NSIS 2.x (default compile, no special `#ifdef`s).
+/// Indices are the `which` field of an entry, in the layout a standard
+/// makensis produces — NSIS 2 and NSIS 3 number their instructions the same
+/// way. What varies is which instructions a build *has*: a build compiled with
+/// logging adds one, the Park fork adds three, and the two UTF-16 file
+/// commands exist only in a Unicode build. Those shift the stored numbering,
+/// which [`normalize_log_opcode`](super::normalize_log_opcode) and
+/// [`normalize_park_opcode`](super::normalize_park_opcode) undo before lookup,
+/// so a caller sees one numbering whatever produced the file.
+///
+/// Parameter counts are the maximum an opcode has taken across NSIS versions,
+/// matching 7-Zip and Binary Refinery: older releases passed operands that
+/// newer ones dropped, and a count that is too low makes a valid entry look
+/// malformed.
 ///
 /// Parameter types are derived from the NSIS source (`exec.c`) and the
 /// 7-Zip NSIS handler (`NsisIn.cpp`).
-pub static OPCODES_NSIS2: [OpcodeInfo; 72] = [
+pub static OPCODES: [OpcodeInfo; 72] = [
     OpcodeInfo {
         mnemonic: "EW_INVALID_OPCODE",
         param_count: 0,
@@ -637,37 +648,22 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 72] = [
     },
 ];
 
-/// NSIS 3.x opcode table.
-///
-/// In NSIS 3.x the opcode numbering is the same as 2.x for the standard build.
-/// Version-specific differences are handled by adjusting the mapping at runtime
-/// when conditional compilation features are detected.
-///
-/// For now this is an alias for [`OPCODES_NSIS2`]; version-specific remapping
-/// will be added when test samples demonstrating the differences are available.
-pub static OPCODES_NSIS3: &[OpcodeInfo] = &OPCODES_NSIS2;
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn all_opcodes_have_mnemonics() {
-        for (i, op) in OPCODES_NSIS2.iter().enumerate() {
+        for (i, op) in OPCODES.iter().enumerate() {
             assert!(!op.mnemonic.is_empty(), "opcode {i} has empty mnemonic");
         }
     }
 
     #[test]
     fn extract_file_opcode() {
-        let op = &OPCODES_NSIS2[20];
+        let op = &OPCODES[20];
         assert_eq!(op.mnemonic, "EW_EXTRACTFILE");
         assert_eq!(op.param_count, 6);
         assert_eq!(op.category, "file");
-    }
-
-    #[test]
-    fn opcodes_nsis3_matches_nsis2_length() {
-        assert_eq!(OPCODES_NSIS3.len(), OPCODES_NSIS2.len());
     }
 }
