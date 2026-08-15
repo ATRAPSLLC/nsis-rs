@@ -13,6 +13,8 @@
 pub mod info;
 pub mod version;
 
+use crate::{nsis::entry::Entry, util::read_i32_le};
+
 pub use info::OpcodeInfo;
 pub use version::{NsisVersion, ParkSubVersion};
 
@@ -225,9 +227,6 @@ pub fn detect_park_sub_version(
     entry_block_offset: usize,
     entry_count: usize,
 ) -> ParkSubVersion {
-    use crate::nsis::entry::Entry;
-    use crate::util::read_i32_le;
-
     // The maximum number of extra inserts for Unicode Park is 4.
     let base = EW_WRITEUNINSTALLER;
     let max_raw = base + 4;
