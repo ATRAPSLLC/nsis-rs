@@ -42,7 +42,12 @@ const NS2_LANG: u8 = 0xFF;
 /// told which one applies rather than accepting either — see the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnsiCodeRange {
-    /// `0xFC-0xFF`, used by NSIS 1 and 2.
+    /// `0xDD-0xFF`, used by NSIS 1. Each code byte is a whole variable
+    /// reference and there are no shell or language codes — a different
+    /// encoding rather than a different range, decoded by
+    /// [`strings::v1`](crate::strings::v1).
+    Nsis1,
+    /// `0xFC-0xFF`, used by NSIS 2.
     Nsis2,
     /// `0x01-0x04`, used by NSIS 3 builds that target ANSI.
     Nsis3,
@@ -54,9 +59,9 @@ impl AnsiCodeRange {
     pub fn for_version(version: NsisVersion) -> Self {
         match version {
             NsisVersion::V3 => AnsiCodeRange::Nsis3,
-            // Park is always Unicode and never reaches this decoder; NSIS 1
-            // shares the NSIS 2 range.
-            NsisVersion::V1 | NsisVersion::V2 | NsisVersion::Park => AnsiCodeRange::Nsis2,
+            NsisVersion::V1 => AnsiCodeRange::Nsis1,
+            // Park is always Unicode and never reaches this decoder.
+            NsisVersion::V2 | NsisVersion::Park => AnsiCodeRange::Nsis2,
         }
     }
 }
@@ -78,6 +83,15 @@ pub(crate) fn is_special_code(b: u8, codes: AnsiCodeRange) -> bool {
 
 fn classify_byte(b: u8, codes: AnsiCodeRange) -> AnsiCode {
     match codes {
+        // Every byte at or above the 1.x code start is a variable in its own
+        // right, so nothing here introduces a multi-byte code.
+        AnsiCodeRange::Nsis1 => {
+            if b >= crate::strings::v1::VAR_CODES_START {
+                AnsiCode::Var
+            } else {
+                AnsiCode::Literal
+            }
+        }
         AnsiCodeRange::Nsis3 => match b {
             NS3_LANG => AnsiCode::Lang,
             NS3_SHELL => AnsiCode::Shell,
@@ -313,9 +327,11 @@ mod tests {
             AnsiCodeRange::for_version(NsisVersion::V2),
             AnsiCodeRange::Nsis2
         );
+        // NSIS 1 does not share NSIS 2's range: its references are one byte
+        // each, in a range NSIS 2 reads as ordinary text.
         assert_eq!(
             AnsiCodeRange::for_version(NsisVersion::V1),
-            AnsiCodeRange::Nsis2
+            AnsiCodeRange::Nsis1
         );
     }
 
