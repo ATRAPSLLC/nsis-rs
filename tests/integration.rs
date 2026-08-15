@@ -12,8 +12,10 @@
 )]
 
 use nsis::{
-    Error, NsisInstaller, SolidStatus, header::firstheader::FirstHeader, opcode::NsisVersion,
-    strings::StringEncoding,
+    Error, NsisInstaller, SolidStatus,
+    header::firstheader::FirstHeader,
+    opcode::NsisVersion,
+    strings::{ShellTarget, StringEncoding, StringSegment},
 };
 
 fn fixture_bytes(name: &str) -> &'static [u8] {
@@ -861,6 +863,70 @@ fn latin1_file_names_decode_intact_in_both_ansi_ranges() {
             "{name}: Latin-1 characters should survive decoding"
         );
     }
+}
+
+#[test]
+fn install_directory_matches_the_build_script() {
+    // Each fixture's `.nsi` declares `InstallDir "$PROGRAMFILES\<name>"`. That
+    // string is a shell-folder reference, which makes this the regression test
+    // for shell decoding: the ANSI fixtures used to report `$INTERNET` because
+    // the id pair was run through the 14-bit number transform.
+    for (fixture, expected) in [
+        ("ansi3_deflate_nonsolid.exe", "$PROGRAMFILES\\Ansi3Test"),
+        ("nsis203_ansi.exe", "$PROGRAMFILES\\Nsis203Test"),
+        ("nsis246_ansi_solid.exe", "$PROGRAMFILES\\Nsis246Test"),
+        ("dirs_unicode_solid.exe", "$PROGRAMFILES\\DirsTest"),
+        ("park1_unicode.exe", "$PROGRAMFILES\\ParkTest"),
+    ] {
+        let inst = parse_fixture(fixture);
+        let dir = inst.install_dir().unwrap();
+        assert_eq!(
+            dir.to_string(),
+            expected,
+            "{fixture}: install directory should match its .nsi"
+        );
+        // The extraction rendering keeps the shell folder as a directory.
+        assert!(
+            dir.to_path().starts_with("_PROGRAMFILES/"),
+            "{fixture}: extraction path was {:?}",
+            dir.to_path()
+        );
+    }
+}
+
+#[test]
+fn registry_backed_shell_folders_resolve() {
+    // A shell reference whose primary id has bit 7 set is a registry lookup:
+    // the low bits point at a value name in the same string table. Reading it
+    // is what tells `$COMMONFILES` from `$PROGRAMFILES`; we used to report
+    // `$PROGRAMFILES` for both.
+    let inst = parse_fixture("nsis246_ansi_solid.exe");
+    let table = inst.string_table();
+
+    let mut common_files = false;
+    let mut program_files = false;
+    for offset in 0..400 {
+        let Ok(string) = table.read(offset) else {
+            continue;
+        };
+        for segment in &string.segments {
+            if let StringSegment::ShellFolder { target, .. } = segment {
+                match target {
+                    ShellTarget::CommonFiles { .. } => common_files = true,
+                    ShellTarget::ProgramFiles { .. } => program_files = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert!(
+        program_files,
+        "the ProgramFiles registry lookup should resolve"
+    );
+    assert!(
+        common_files,
+        "the CommonFiles registry lookup should resolve, not report ProgramFiles"
+    );
 }
 
 #[test]

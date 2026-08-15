@@ -42,6 +42,25 @@ pub const CH_FLAGS_NO_CUSTOM: u32 = 512;
 /// Maximum number of install types.
 pub const NSIS_MAX_INST_TYPES: usize = 32;
 
+/// Byte offset of `install_directory_ptr` in the standard layout.
+///
+/// The install-type table sits between the callbacks and the directory fields
+/// and is easy to overlook: `NSIS_MAX_INST_TYPES + 1` integers, 132 bytes, so
+/// the directory pointer is *not* at 148 where the callbacks end.
+///
+/// | Offset | Field |
+/// |---|---|
+/// | 108..148 | 10 callback entry indices |
+/// | 148..280 | install types (`NSIS_MAX_INST_TYPES + 1` ints) |
+/// | 280 | `install_directory_ptr` |
+/// | 284 | `install_directory_auto_append` |
+/// | 288 | `str_uninstchild` |
+/// | 292 | `str_uninstcmd` |
+/// | 296 | `str_wininit` |
+///
+/// Source: `fileform.h`, `header` struct.
+const INSTALL_DIR_OFFSET: usize = 148 + (NSIS_MAX_INST_TYPES + 1) * 4;
+
 /// Minimum size of the common header (flags + 8 block headers).
 ///
 /// This is the absolute minimum; the full header is larger but the exact
@@ -265,6 +284,69 @@ impl<'a> CommonHeader<'a> {
         } else {
             -1
         }
+    }
+
+    /// Returns the string offset of the registry key the installer records
+    /// itself under, or `-1` if unset.
+    ///
+    /// Paired with [`install_reg_rootkey`](Self::install_reg_rootkey) and
+    /// [`install_reg_value_ptr`](Self::install_reg_value_ptr), this is where
+    /// the installer stores its own install directory for later uninstallation.
+    pub fn install_reg_key_ptr(&self) -> i32 {
+        self.field_at(72).unwrap_or(-1)
+    }
+
+    /// Returns the string offset of the registry value name, or `-1` if unset.
+    pub fn install_reg_value_ptr(&self) -> i32 {
+        self.field_at(76).unwrap_or(-1)
+    }
+
+    /// Returns the string offset of the default install directory, or `-1`.
+    ///
+    /// This is the `InstallDir` from the script, and typically the most
+    /// interesting string in the header — it is where the installer writes by
+    /// default and usually begins with a shell folder such as `$PROGRAMFILES`.
+    pub fn install_dir_ptr(&self) -> i32 {
+        self.field_at(INSTALL_DIR_OFFSET).unwrap_or(-1)
+    }
+
+    /// Returns the string offset of the directory name appended to a
+    /// user-chosen install location, or `-1`.
+    ///
+    /// Set by `InstallDirRegKey`'s auto-append behaviour.
+    pub fn install_dir_auto_append_ptr(&self) -> i32 {
+        self.field_at(INSTALL_DIR_OFFSET.saturating_add(4))
+            .unwrap_or(-1)
+    }
+
+    /// Returns the string offset of the uninstaller's child path, or `-1`.
+    pub fn uninstall_child_ptr(&self) -> i32 {
+        self.field_at(INSTALL_DIR_OFFSET.saturating_add(8))
+            .unwrap_or(-1)
+    }
+
+    /// Returns the string offset of the uninstaller command line, or `-1`.
+    ///
+    /// The command NSIS registers so Windows can run the uninstaller.
+    pub fn uninstall_command_ptr(&self) -> i32 {
+        self.field_at(INSTALL_DIR_OFFSET.saturating_add(12))
+            .unwrap_or(-1)
+    }
+
+    /// Returns the string offset of the `wininit.ini` path used for
+    /// delete-on-reboot, or `-1`.
+    pub fn wininit_ptr(&self) -> i32 {
+        self.field_at(INSTALL_DIR_OFFSET.saturating_add(16))
+            .unwrap_or(-1)
+    }
+
+    /// Reads a header field, or `None` if this installer's header stops short.
+    ///
+    /// The tail fields are all compiled conditionally in NSIS, so a header
+    /// built without a feature simply ends before them.
+    fn field_at(&self, offset: usize) -> Option<i32> {
+        let end = offset.checked_add(4)?;
+        (self.bytes.len() >= end).then(|| read_i32_le(self.bytes, offset))
     }
 
     /// Returns a slice of the decompressed header data for the given block type.

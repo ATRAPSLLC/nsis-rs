@@ -11,7 +11,7 @@ use crate::{
         firstheader::{FH_FLAGS_UNINSTALL, FirstHeader},
     },
     installer::{
-        analysis::{ExecIter, PluginCallIter, RegistryIter, ShortcutIter, UninstallerIter},
+        analysis::{self, ExecIter, PluginCallIter, RegistryIter, ShortcutIter, UninstallerIter},
         callback::Callback,
         files::FileIter,
         script::{self, ScriptAnalysis},
@@ -55,6 +55,23 @@ pub enum SolidStatus {
     /// Decoding failed outright, leaving no file data. Every file reports this
     /// error.
     Failed(Error),
+}
+
+/// String-table offsets from the tail of the common header.
+///
+/// These describe where the installer writes and how it registers itself. They
+/// are stored as offsets and resolved on demand, since resolving needs the
+/// string table.
+#[derive(Debug, Clone, Copy)]
+struct HeaderStrings {
+    install_dir: i32,
+    install_dir_auto_append: i32,
+    install_reg_key: i32,
+    install_reg_value: i32,
+    install_reg_rootkey: i32,
+    uninstall_child: i32,
+    uninstall_command: i32,
+    wininit: i32,
 }
 
 /// Parsed NSIS installer providing access to all internal structures.
@@ -121,6 +138,8 @@ pub struct NsisInstaller<'a> {
     langtable_size: i32,
     /// On-disk section size (base 24 bytes + optional inline name buffer).
     section_size: usize,
+    /// String offsets from the tail of the common header.
+    header_strings: HeaderStrings,
     /// Callback entry indices from the common header.
     ///
     /// Order: onInit, onInstSuccess, onInstFailed, onUserAbort, onGUIInit,
@@ -243,7 +262,7 @@ impl<'a> NsisInstaller<'a> {
 
         // Step 4: Parse the common header and extract all values before
         // moving header_data into the struct (CommonHeader borrows header_data).
-        let (blocks, common_flags, langtable_size, callbacks) = {
+        let (blocks, common_flags, langtable_size, callbacks, header_strings) = {
             let common_header = CommonHeader::parse(&header_data)?;
             let mut blocks = [(0u32, 0i32); 8];
             for (block, bh) in blocks.iter_mut().zip(common_header.blocks().iter()) {
@@ -261,11 +280,22 @@ impl<'a> NsisInstaller<'a> {
                 common_header.code_on_sel_change(),
                 common_header.code_on_reboot_failed(),
             ];
+            let header_strings = HeaderStrings {
+                install_dir: common_header.install_dir_ptr(),
+                install_dir_auto_append: common_header.install_dir_auto_append_ptr(),
+                install_reg_key: common_header.install_reg_key_ptr(),
+                install_reg_value: common_header.install_reg_value_ptr(),
+                install_reg_rootkey: common_header.install_reg_rootkey(),
+                uninstall_child: common_header.uninstall_child_ptr(),
+                uninstall_command: common_header.uninstall_command_ptr(),
+                wininit: common_header.wininit_ptr(),
+            };
             (
                 blocks,
                 common_header.flags(),
                 common_header.langtable_size(),
                 callbacks,
+                header_strings,
             )
         };
 
@@ -429,6 +459,7 @@ impl<'a> NsisInstaller<'a> {
             blocks,
             common_flags,
             langtable_size,
+            header_strings,
             section_size,
             callbacks,
             park_sub,
@@ -591,6 +622,86 @@ impl<'a> NsisInstaller<'a> {
     /// is `offset * 2`. For ANSI installers, each TCHAR is 1 byte.
     pub fn read_string(&self, offset: i32) -> Result<NsisString, Error> {
         self.string_table().read(offset)
+    }
+
+    /// Returns the directory the installer writes to by default.
+    ///
+    /// This is the script's `InstallDir`, and usually begins with a shell
+    /// folder — `$PROGRAMFILES\MyApp`. Render it with
+    /// [`NsisString::to_install_path`](crate::strings::NsisString::to_install_path)
+    /// or, to place it under an extraction directory,
+    /// [`to_path`](crate::strings::NsisString::to_path).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the string cannot be read from the table.
+    pub fn install_dir(&self) -> Result<NsisString, Error> {
+        self.read_string(self.header_strings.install_dir)
+    }
+
+    /// Returns the directory name appended to a user-chosen install location.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the string cannot be read from the table.
+    pub fn install_dir_auto_append(&self) -> Result<NsisString, Error> {
+        self.read_string(self.header_strings.install_dir_auto_append)
+    }
+
+    /// Returns the registry key the installer records its own location under.
+    ///
+    /// Together with [`install_reg_value`](Self::install_reg_value) and
+    /// [`install_reg_root_name`](Self::install_reg_root_name) this is how the
+    /// installer finds a previous installation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the string cannot be read from the table.
+    pub fn install_reg_key(&self) -> Result<NsisString, Error> {
+        self.read_string(self.header_strings.install_reg_key)
+    }
+
+    /// Returns the registry value name holding the recorded location.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the string cannot be read from the table.
+    pub fn install_reg_value(&self) -> Result<NsisString, Error> {
+        self.read_string(self.header_strings.install_reg_value)
+    }
+
+    /// Returns the root key for [`install_reg_key`](Self::install_reg_key),
+    /// e.g. `HKLM`.
+    #[inline]
+    pub fn install_reg_root_name(&self) -> &'static str {
+        analysis::hkey_name(self.header_strings.install_reg_rootkey)
+    }
+
+    /// Returns the command line registered for running the uninstaller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the string cannot be read from the table.
+    pub fn uninstall_command(&self) -> Result<NsisString, Error> {
+        self.read_string(self.header_strings.uninstall_command)
+    }
+
+    /// Returns the uninstaller's child path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the string cannot be read from the table.
+    pub fn uninstall_child(&self) -> Result<NsisString, Error> {
+        self.read_string(self.header_strings.uninstall_child)
+    }
+
+    /// Returns the `wininit.ini` path used for delete-on-reboot operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the string cannot be read from the table.
+    pub fn wininit_path(&self) -> Result<NsisString, Error> {
+        self.read_string(self.header_strings.wininit)
     }
 
     /// Returns a view of this installer's string table.
