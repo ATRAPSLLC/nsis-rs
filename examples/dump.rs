@@ -321,7 +321,7 @@ fn extract_files(installer: &NsisInstaller<'_>, outdir: &str) {
 
     let mut extracted = 0;
     let mut errors = 0;
-    let mut seen_offsets = HashSet::new();
+    let mut seen_paths = HashSet::new();
 
     for file in installer.files() {
         let file = match file {
@@ -333,13 +333,8 @@ fn extract_files(installer: &NsisInstaller<'_>, outdir: &str) {
             }
         };
 
-        // Deduplicate: skip files at already-seen data offsets.
-        if !seen_offsets.insert(file.data_block_offset()) {
-            continue;
-        }
-
-        let path = match file.name() {
-            Ok(n) => n.to_path(),
+        let path = match file.dest_path() {
+            Ok(path) => path.to_path(),
             Err(e) => {
                 eprintln!("  error reading filename: {e}");
                 errors += 1;
@@ -348,6 +343,13 @@ fn extract_files(installer: &NsisInstaller<'_>, outdir: &str) {
         };
 
         if path.is_empty() {
+            continue;
+        }
+
+        // NSIS stores one copy of duplicated content and extracts it to
+        // several destinations, so deduplicate by path rather than by data
+        // offset — the same payload legitimately lands in several places.
+        if !seen_paths.insert(path.clone()) {
             continue;
         }
 

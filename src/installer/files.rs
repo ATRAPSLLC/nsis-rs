@@ -29,7 +29,7 @@ use crate::{
         nsisinstaller::SolidStatus,
     },
     nsis::entry::{Entry, EntryIter},
-    strings::NsisString,
+    strings::{NsisString, StringSegment},
 };
 
 /// A single embedded file found in an NSIS installer.
@@ -60,12 +60,83 @@ use crate::{
 pub struct ExtractedFile<'a> {
     installer: &'a NsisInstaller<'a>,
     entry: Entry<'a>,
+    /// Output directory in effect when this file was extracted, or `None` for
+    /// a name that already carries its own root.
+    out_dir: Option<NsisString>,
 }
 
 impl<'a> ExtractedFile<'a> {
     /// Builds a view over an `EW_EXTRACTFILE` entry.
-    pub(crate) fn new(installer: &'a NsisInstaller<'a>, entry: Entry<'a>) -> Self {
-        Self { installer, entry }
+    pub(crate) fn new(
+        installer: &'a NsisInstaller<'a>,
+        entry: Entry<'a>,
+        out_dir: Option<NsisString>,
+    ) -> Self {
+        Self {
+            installer,
+            entry,
+            out_dir,
+        }
+    }
+
+    /// Returns the file's full destination path.
+    ///
+    /// [`name`](Self::name) gives only what the `EW_EXTRACTFILE` instruction
+    /// stores, which is usually a bare file name. The directory comes from the
+    /// `SetOutPath` in effect at that point in the script, so this joins the
+    /// two and yields the path the installer would actually write:
+    ///
+    /// ```no_run
+    /// # let data = std::fs::read("installer.exe").unwrap();
+    /// # let inst = nsis::NsisInstaller::from_bytes(&data).unwrap();
+    /// for file in inst.files() {
+    ///     let path = file.unwrap().dest_path().unwrap();
+    ///
+    ///     // "Lang\de_DE.ini", relative to the install directory, as 7-Zip lists it.
+    ///     println!("{}", path.to_install_path());
+    ///
+    ///     // "Lang/de_DE.ini", safe to join onto an output directory.
+    ///     println!("{}", path.to_path());
+    /// }
+    /// ```
+    ///
+    /// A name that already carries its own root is returned unchanged, so an
+    /// electron-builder payload stays `$PLUGINSDIR\app-64.7z` rather than being
+    /// moved under the install directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the name cannot be read from the string table.
+    pub fn dest_path(&self) -> Result<NsisString, Error> {
+        let name = self.name()?;
+        let Some(out_dir) = &self.out_dir else {
+            return Ok(name);
+        };
+        if out_dir.is_empty() {
+            return Ok(name);
+        }
+
+        let mut segments = out_dir.segments.clone();
+        // Only add a separator if the directory does not already end with one.
+        let ends_with_separator = matches!(
+            segments.last(),
+            Some(StringSegment::Literal(text)) if text.ends_with('\\') || text.ends_with('/')
+        );
+        if !ends_with_separator {
+            segments.push(StringSegment::Literal("\\".into()));
+        }
+        segments.extend(name.segments);
+        Ok(NsisString { segments })
+    }
+
+    /// Returns the output directory this file is extracted into.
+    ///
+    /// `None` when the name carries its own root and no directory applies. The
+    /// directory is reconstructed by replaying `SetOutPath` instructions, so it
+    /// still contains unresolved references such as `$INSTDIR`.
+    #[inline]
+    pub fn out_dir(&self) -> Option<&NsisString> {
+        self.out_dir.as_ref()
     }
 
     /// Returns the file name as a decoded NSIS string.

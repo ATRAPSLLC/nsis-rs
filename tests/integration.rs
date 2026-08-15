@@ -930,6 +930,49 @@ fn registry_backed_shell_folders_resolve() {
 }
 
 #[test]
+fn destination_paths_follow_set_out_path() {
+    // Every construct the dirs fixtures exercise, in script order. Both the
+    // NSIS 3 Unicode and NSIS 2.46 ANSI builds must reconstruct the same tree.
+    let expected = [
+        // Plain install root.
+        ("payload.txt", "payload.txt"),
+        // Nested subdirectory.
+        ("Lang\\de_DE.ini", "Lang/de_DE.ini"),
+        ("Lang\\en_US.ini", "Lang/en_US.ini"),
+        // Deeper nesting.
+        ("Lang\\regional\\de_AT.ini", "Lang/regional/de_AT.ini"),
+        // `SetOutPath "$OUTDIR\extra"` resolved against the directory in effect.
+        (
+            "Lang\\regional\\extra\\nested.ini",
+            "Lang/regional/extra/nested.ini",
+        ),
+        // A plain CreateDirectory in between must not become the prefix.
+        ("after\\after.txt", "after/after.txt"),
+        // An absolute destination keeps its own root.
+        ("$PLUGINSDIR\\app-64.7z", "_plugins/app-64.7z"),
+        // Back to the root.
+        ("last.txt", "last.txt"),
+    ];
+
+    for fixture in ["dirs_unicode_solid.exe", "dirs_nsis246_ansi_solid.exe"] {
+        let inst = parse_fixture(fixture);
+        let paths: Vec<(String, String)> = inst
+            .files()
+            .map(|file| {
+                let path = file.unwrap().dest_path().unwrap();
+                (path.to_install_path(), path.to_path())
+            })
+            .collect();
+
+        let expected: Vec<(String, String)> = expected
+            .iter()
+            .map(|(install, extract)| ((*install).to_string(), (*extract).to_string()))
+            .collect();
+        assert_eq!(paths, expected, "{fixture}");
+    }
+}
+
+#[test]
 fn one_walk_yields_what_the_typed_iterators_do() {
     // The typed iterators are filters over `instructions()`, so a single pass
     // must account for exactly what six passes used to. This is what keeps the
