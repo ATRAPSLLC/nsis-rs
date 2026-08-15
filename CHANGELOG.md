@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Installer stubs that a strict PE parse rejects are now parsed. Overlay
+  detection needs only the optional header and section table, so the PE is
+  parsed permissively with resources, imports, TLS, certificates and RVA
+  resolution switched off, and sections whose raw range ends past EOF are
+  ignored when locating the overlay. Stock output from makensis 2.03 (resource
+  directory past the appended data) and from the Park 2.46.2+ Unicode fork
+  (unmappable base-relocation RVA, plus a `.reloc` header claiming more bytes
+  than the file holds) previously failed with a `Goblin` error. 7-Zip
+  mis-detects the same Park stubs as plain PE files.
 - Over-budget solid installers no longer report truncation as data corruption.
   The solid stream was decoded with `DecodeLimit::Truncate` and the outcome
   discarded, so every file past the cut failed with a bounds error
