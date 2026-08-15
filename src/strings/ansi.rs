@@ -10,12 +10,16 @@
 //! | NSIS 3.x | 0x04 | 0x03 | 0x02 | 0x01 |
 //! | NSIS 2.x | 0xFC (252) | 0xFD (253) | 0xFE (254) | 0xFF (255) |
 //!
-//! This reader handles both ranges transparently.
+//! Only one range is live in any given table, and which one must be known
+//! before decoding: honouring both at once corrupts text, because each range
+//! is ordinary character data under the other convention. `0xFC-0xFF` are the
+//! Latin-1 characters `ü ý þ ÿ`, and `0x01-0x04` are control characters.
 //!
 //! Sources: `fileform.h`, NRS `nsis2.py` / `nsis3.py`.
 
 use crate::{
     error::Error,
+    opcode::NsisVersion,
     strings::{NsisString, StringSegment, decode_short},
 };
 
@@ -31,6 +35,32 @@ const NS2_VAR: u8 = 0xFD;
 const NS2_SHELL: u8 = 0xFE;
 const NS2_LANG: u8 = 0xFF;
 
+/// Which of the two ANSI special-code ranges a string table uses.
+///
+/// NSIS 3 moved the codes from the top of the byte range to the bottom. The
+/// ranges overlap with real text in both directions, so a decoder has to be
+/// told which one applies rather than accepting either — see the module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnsiCodeRange {
+    /// `0xFC-0xFF`, used by NSIS 1 and 2.
+    Nsis2,
+    /// `0x01-0x04`, used by NSIS 3 builds that target ANSI.
+    Nsis3,
+}
+
+impl AnsiCodeRange {
+    /// Returns the range a given NSIS version writes.
+    #[inline]
+    pub fn for_version(version: NsisVersion) -> Self {
+        match version {
+            NsisVersion::V3 => AnsiCodeRange::Nsis3,
+            // Park is always Unicode and never reaches this decoder; NSIS 1
+            // shares the NSIS 2 range.
+            NsisVersion::V1 | NsisVersion::V2 | NsisVersion::Park => AnsiCodeRange::Nsis2,
+        }
+    }
+}
+
 /// Classifies a byte as an NSIS special code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AnsiCode {
@@ -41,21 +71,34 @@ enum AnsiCode {
     Lang,
 }
 
-fn classify_byte(b: u8) -> AnsiCode {
-    match b {
-        NS3_LANG | NS2_LANG => AnsiCode::Lang,
-        NS3_SHELL | NS2_SHELL => AnsiCode::Shell,
-        NS3_VAR | NS2_VAR => AnsiCode::Var,
-        NS3_SKIP | NS2_SKIP => AnsiCode::Skip,
-        _ => AnsiCode::Literal,
+fn classify_byte(b: u8, codes: AnsiCodeRange) -> AnsiCode {
+    match codes {
+        AnsiCodeRange::Nsis3 => match b {
+            NS3_LANG => AnsiCode::Lang,
+            NS3_SHELL => AnsiCode::Shell,
+            NS3_VAR => AnsiCode::Var,
+            NS3_SKIP => AnsiCode::Skip,
+            _ => AnsiCode::Literal,
+        },
+        AnsiCodeRange::Nsis2 => match b {
+            NS2_LANG => AnsiCode::Lang,
+            NS2_SHELL => AnsiCode::Shell,
+            NS2_VAR => AnsiCode::Var,
+            NS2_SKIP => AnsiCode::Skip,
+            _ => AnsiCode::Literal,
+        },
     }
 }
 
 /// Reads an ANSI-encoded NSIS string from the string table.
 ///
-/// Handles both NSIS 2.x (`0xFC-0xFF`) and NSIS 3.x (`0x01-0x04`) special codes.
 /// The string starts at `offset` and continues until a null byte (`0x00`).
-pub fn read_ansi_string(table: &[u8], offset: usize) -> Result<NsisString, Error> {
+/// `codes` selects the special-code range; bytes outside it are literal text.
+pub fn read_ansi_string(
+    table: &[u8],
+    offset: usize,
+    codes: AnsiCodeRange,
+) -> Result<NsisString, Error> {
     let mut segments = Vec::new();
     let mut literal = String::new();
     let mut pos = offset;
@@ -65,7 +108,7 @@ pub fn read_ansi_string(table: &[u8], offset: usize) -> Result<NsisString, Error
             break;
         }
 
-        let code = classify_byte(b);
+        let code = classify_byte(b, codes);
 
         if code != AnsiCode::Literal {
             if code == AnsiCode::Skip {
@@ -121,7 +164,7 @@ mod tests {
     #[test]
     fn plain_string() {
         let table = b"Hello World\0rest";
-        let s = read_ansi_string(table, 0).unwrap();
+        let s = read_ansi_string(table, 0, AnsiCodeRange::Nsis3).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert_eq!(s.segments[0], StringSegment::Literal("Hello World".into()));
     }
@@ -137,7 +180,7 @@ mod tests {
         table.push(b1);
         table.push(0);
 
-        let s = read_ansi_string(&table, 0).unwrap();
+        let s = read_ansi_string(&table, 0, AnsiCodeRange::Nsis3).unwrap();
         assert_eq!(s.segments.len(), 2);
         assert_eq!(s.segments[0], StringSegment::Literal("Install to ".into()));
         assert_eq!(s.segments[1], StringSegment::Variable(21));
@@ -155,10 +198,83 @@ mod tests {
         table.push(b1);
         table.push(0);
 
-        let s = read_ansi_string(&table, 0).unwrap();
+        let s = read_ansi_string(&table, 0, AnsiCodeRange::Nsis2).unwrap();
         assert_eq!(s.segments.len(), 2);
         assert_eq!(s.segments[0], StringSegment::Literal("Dir: ".into()));
         assert_eq!(s.segments[1], StringSegment::Variable(21));
+    }
+
+    #[test]
+    fn latin1_text_survives_the_nsis3_range() {
+        // Regression: accepting both ranges at once made `0xFC` a SKIP code,
+        // which swallowed the following byte, and `0xFE` a shell-folder code.
+        // In an NSIS 3 ANSI table these are the characters `ü` and `þ`.
+        // "grüße.txt" and "þýÿ.ini" in Windows-1252.
+        let table = [
+            b'g', b'r', 0xFC, 0xDF, b'e', b'.', b't', b'x', b't', 0x00, 0xFE, 0xFD, 0xFF, b'.',
+            b'i', b'n', b'i', 0x00,
+        ];
+
+        let first = read_ansi_string(&table, 0, AnsiCodeRange::Nsis3).unwrap();
+        assert_eq!(
+            first.segments,
+            vec![StringSegment::Literal("gr\u{FC}\u{DF}e.txt".into())]
+        );
+
+        let second = read_ansi_string(&table, 10, AnsiCodeRange::Nsis3).unwrap();
+        assert_eq!(
+            second.segments,
+            vec![StringSegment::Literal("\u{FE}\u{FD}\u{FF}.ini".into())]
+        );
+    }
+
+    #[test]
+    fn the_same_bytes_decode_differently_per_range() {
+        // The two ranges are not distinguishable byte by byte, which is why the
+        // decoder has to be told which applies. Here 0xFD is either a variable
+        // reference or the character `ý`.
+        let (b0, b1) = encode_short(21);
+        let table = [0xFD, b0, b1, 0x00];
+
+        let as_nsis2 = read_ansi_string(&table, 0, AnsiCodeRange::Nsis2).unwrap();
+        assert_eq!(as_nsis2.segments, vec![StringSegment::Variable(21)]);
+
+        let as_nsis3 = read_ansi_string(&table, 0, AnsiCodeRange::Nsis3).unwrap();
+        assert_eq!(
+            as_nsis3.segments,
+            vec![StringSegment::Literal(format!(
+                "\u{FD}{}{}",
+                b0 as char, b1 as char
+            ))]
+        );
+    }
+
+    #[test]
+    fn control_characters_survive_the_nsis2_range() {
+        // The mirror image: 0x01-0x04 are ordinary control characters in an
+        // NSIS 2 table, and an NSIS 2 script can legitimately contain them.
+        let table = [b'a', 0x03, 0x95, 0x80, b'b', 0x00];
+        let decoded = read_ansi_string(&table, 0, AnsiCodeRange::Nsis2).unwrap();
+        assert_eq!(
+            decoded.segments,
+            vec![StringSegment::Literal("a\u{3}\u{95}\u{80}b".into())]
+        );
+    }
+
+    #[test]
+    fn code_range_follows_the_version() {
+        assert_eq!(
+            AnsiCodeRange::for_version(NsisVersion::V3),
+            AnsiCodeRange::Nsis3
+        );
+        assert_eq!(
+            AnsiCodeRange::for_version(NsisVersion::V2),
+            AnsiCodeRange::Nsis2
+        );
+        assert_eq!(
+            AnsiCodeRange::for_version(NsisVersion::V1),
+            AnsiCodeRange::Nsis2
+        );
     }
 
     #[test]
@@ -170,7 +286,7 @@ mod tests {
         table.push(b1);
         table.extend_from_slice(b"\\MyApp\0");
 
-        let s = read_ansi_string(&table, 0).unwrap();
+        let s = read_ansi_string(&table, 0, AnsiCodeRange::Nsis2).unwrap();
         assert_eq!(s.segments.len(), 2);
         assert_eq!(s.segments[0], StringSegment::ShellFolder(0x001A));
         assert_eq!(s.segments[1], StringSegment::Literal("\\MyApp".into()));
@@ -184,7 +300,7 @@ mod tests {
         table.push(0x03); // literal 0x03
         table.extend_from_slice(b"B\0");
 
-        let s = read_ansi_string(&table, 0).unwrap();
+        let s = read_ansi_string(&table, 0, AnsiCodeRange::Nsis3).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert_eq!(s.segments[0], StringSegment::Literal("A\x03B".into()));
     }
@@ -193,7 +309,7 @@ mod tests {
     fn nsis2_skip_code() {
         let table = vec![NS2_SKIP, NS2_VAR, 0]; // SKIP makes 0xFD literal
 
-        let s = read_ansi_string(&table, 0).unwrap();
+        let s = read_ansi_string(&table, 0, AnsiCodeRange::Nsis2).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert_eq!(
             s.segments[0],
@@ -204,7 +320,7 @@ mod tests {
     #[test]
     fn string_at_offset() {
         let table = b"\0\0\0Hello\0";
-        let s = read_ansi_string(table, 3).unwrap();
+        let s = read_ansi_string(table, 3, AnsiCodeRange::Nsis3).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert_eq!(s.segments[0], StringSegment::Literal("Hello".into()));
     }
@@ -212,7 +328,7 @@ mod tests {
     #[test]
     fn empty_string() {
         let table = b"\0";
-        let s = read_ansi_string(table, 0).unwrap();
+        let s = read_ansi_string(table, 0, AnsiCodeRange::Nsis3).unwrap();
         assert!(s.is_empty());
     }
 }

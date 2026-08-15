@@ -211,10 +211,7 @@ const FIXTURES: &[Fixture] = &[
         uninstallers: 0,
         budget: DEFAULT_BUDGET,
         version_defect: None,
-        name_defect: Some(
-            "the ANSI decoder treats 0xFC-0xFF as NSIS-2 special codes, so the \
-             Latin-1 characters in these names are eaten or misread as a shell folder",
-        ),
+        name_defect: None,
     },
     // -- NSIS 2.x, ANSI --
     Fixture {

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `strings::ansi::AnsiCodeRange`, selecting which ANSI special-code range a
+  string table uses, with `for_version()`.
 - `NsisString::to_install_path()`, rendering the path as the installer itself
   would write it — references kept verbatim, backslash separators, a leading
   `$INSTDIR\` removed — which is what 7-Zip lists for the same archive.
@@ -31,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `strings::read_nsis_string`, `strings::read_string_at` and
+  `strings::ansi::read_ansi_string` take the ANSI code range to decode with.
 - `NsisString`'s `Display` now matches 7-Zip's wording for references that
   cannot be resolved statically: language strings render as `$(LSTR_n)` rather
   than `${LANG:n}`, and an unmappable shell folder as
@@ -47,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ANSI string tables no longer decode with both special-code ranges at once,
+  which mangled text. The decoder accepted `0x01-0x04` *and* `0xFC-0xFF` as
+  codes, but only one range is live per table and each is ordinary character
+  data under the other convention: `0xFC-0xFF` are the Latin-1 characters
+  `ü ý þ ÿ`, and `0x01-0x04` are control characters. An NSIS 3 ANSI installer
+  containing `grüße.txt` and `þýÿ.ini` reported them as `grße.txt` and
+  `$PROGRAMFILES64.ini`. The range now follows the detected version.
 - `to_path()` no longer keeps absolute prefixes, which let extraction escape the
   output directory. `C:\evil.exe` rendered as `C:/evil.exe`, and on Windows
   joining an absolute path onto a base discards the base — so an installer

@@ -17,7 +17,7 @@ pub mod unicode;
 use core::fmt;
 use std::borrow::Cow;
 
-use crate::error::Error;
+use crate::{error::Error, strings::ansi::AnsiCodeRange};
 
 /// Identifies the string encoding used by an NSIS installer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -458,6 +458,7 @@ pub fn read_nsis_string(
     table: &[u8],
     offset: usize,
     encoding: StringEncoding,
+    codes: AnsiCodeRange,
 ) -> Result<NsisString, Error> {
     if offset >= table.len() {
         return Err(Error::InvalidStringOffset {
@@ -466,7 +467,7 @@ pub fn read_nsis_string(
     }
 
     match encoding {
-        StringEncoding::Ansi => ansi::read_ansi_string(table, offset),
+        StringEncoding::Ansi => ansi::read_ansi_string(table, offset, codes),
         StringEncoding::Unicode => unicode::read_unicode_string(table, offset),
         StringEncoding::Park => park::read_park_string(table, offset),
     }
@@ -493,6 +494,7 @@ pub fn read_string_at(
     header_data: &[u8],
     string_block_offset: usize,
     encoding: StringEncoding,
+    codes: AnsiCodeRange,
     offset: i32,
 ) -> Result<NsisString, Error> {
     if offset < 0 {
@@ -507,7 +509,7 @@ pub fn read_string_at(
     };
     let abs_offset =
         string_block_offset.saturating_add((offset as usize).saturating_mul(char_size));
-    read_nsis_string(header_data, abs_offset, encoding)
+    read_nsis_string(header_data, abs_offset, encoding, codes)
 }
 
 /// Number of built-in (internal) NSIS variables.
@@ -833,7 +835,7 @@ mod tests {
     #[test]
     fn read_string_out_of_bounds() {
         let table = b"hello\0";
-        let result = read_nsis_string(table, 100, StringEncoding::Ansi);
+        let result = read_nsis_string(table, 100, StringEncoding::Ansi, AnsiCodeRange::Nsis2);
         assert!(result.is_err());
     }
 
