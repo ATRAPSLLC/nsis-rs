@@ -44,9 +44,15 @@ use crate::{
     error::Error,
     installer::{ExtractedFile, NsisInstaller},
     nsis::entry::{Entry, EntryIter},
-    opcode,
-    strings::NsisString,
+    opcode::{self, Nsis2SubVersion},
+    strings::{
+        NsisString, StringSegment, VAR_EXEDIR, VAR_INSTDIR, VAR_OUTDIR, VAR_PLUGINSDIR, VAR_TEMP,
+        starts_with_drive_letter,
+    },
 };
+
+/// Index of `$_OUTDIR` in NSIS 2.26 and later, which NSIS 3 inherited.
+const SPEC_OUT_DIR_VAR: u16 = 31;
 
 /// Resolves an HKEY root constant to its conventional name.
 ///
@@ -766,15 +772,111 @@ impl<'a> RegistryOp<'a> {
 
 /// Iterator over an installer's instructions.
 ///
-/// Created by [`NsisInstaller::instructions`].
+/// Created by [`NsisInstaller::instructions`]. Besides classifying entries,
+/// this tracks the output directory `SetOutPath` selects, which is what lets
+/// [`ExtractedFile::dest_path`](crate::installer::ExtractedFile::dest_path)
+/// report where a file is written.
 pub struct InstructionIter<'a> {
     installer: &'a NsisInstaller<'a>,
     entries: EntryIter<'a>,
+    /// The directory `SetOutPath` has most recently selected.
+    ///
+    /// NSIS resolves file destinations against this at install time, so
+    /// reconstructing it means replaying the instruction stream in order —
+    /// which is why the walk, not the entry, carries it.
+    out_dir: NsisString,
+    /// The directory saved in `$_OUTDIR`, if a `StrCpy` put one there.
+    saved_out_dir: Option<Vec<StringSegment>>,
+    /// Index of the internal `$_OUTDIR` variable, which moved in NSIS 2.26.
+    spec_out_dir_var: u16,
 }
 
 impl<'a> InstructionIter<'a> {
     pub(crate) fn new(installer: &'a NsisInstaller<'a>, entries: EntryIter<'a>) -> Self {
-        Self { installer, entries }
+        Self {
+            installer,
+            entries,
+            // Installers write to `$INSTDIR` until told otherwise.
+            out_dir: NsisString {
+                segments: vec![StringSegment::Variable {
+                    index: VAR_INSTDIR,
+                    name: installer.string_table().variable_name(VAR_INSTDIR),
+                }],
+            },
+            saved_out_dir: None,
+            spec_out_dir_var: installer
+                .nsis2_sub_version()
+                .map_or(SPEC_OUT_DIR_VAR, Nsis2SubVersion::spec_outdir_var_index),
+        }
+    }
+
+    /// Applies a `SetOutPath` to the current output directory.
+    ///
+    /// The target is usually a complete path, but it can be written relative to
+    /// the directory already in effect — `SetOutPath "$OUTDIR\extra"` — or to
+    /// the one saved in `$_OUTDIR`. Both are resolved here, so the tracked
+    /// directory is always a full path.
+    fn set_out_path(&mut self, target: NsisString) {
+        let mut segments = target.segments.into_iter();
+        let base = match segments.next() {
+            Some(StringSegment::Variable { index, .. }) if index == VAR_OUTDIR => {
+                self.out_dir.segments.clone()
+            }
+            Some(StringSegment::Variable { index, .. }) if index == self.spec_out_dir_var => {
+                self.saved_out_dir.clone().unwrap_or_default()
+            }
+            // Any other leading segment means the path stands on its own.
+            other => {
+                self.out_dir = NsisString {
+                    segments: other.into_iter().chain(segments).collect(),
+                };
+                return;
+            }
+        };
+
+        let mut resolved = base;
+        resolved.extend(segments);
+        self.out_dir = NsisString { segments: resolved };
+    }
+
+    /// Records `StrCpy $_OUTDIR $OUTDIR`, the save NSIS emits before changing
+    /// directory so it can restore it later.
+    ///
+    /// Any other assignment puts something unknown in that variable, so the
+    /// saved directory is dropped rather than guessed at.
+    fn save_out_path(&mut self, entry: &Entry<'_>) {
+        let copies_whole_string = entry.offset(2) == 0 && entry.offset(3) == 0;
+        let source_is_out_dir = self
+            .installer
+            .read_string(entry.offset(1))
+            .is_ok_and(|source| {
+                matches!(
+                    source.segments.as_slice(),
+                    [StringSegment::Variable { index, .. }] if *index == VAR_OUTDIR
+                )
+            });
+
+        self.saved_out_dir =
+            (copies_whole_string && source_is_out_dir).then(|| self.out_dir.segments.clone());
+    }
+
+    /// Returns the directory to record for a file with this name.
+    ///
+    /// A name that already begins at a known root — `$INSTDIR`, `$PLUGINSDIR`,
+    /// a drive letter, a UNC share — names its own location, so the current
+    /// output directory does not apply to it.
+    fn out_dir_for(&self, name: &NsisString) -> Option<NsisString> {
+        let is_rooted = match name.segments.first() {
+            Some(StringSegment::Variable { index, .. }) => {
+                matches!(*index, VAR_INSTDIR | VAR_EXEDIR | VAR_TEMP | VAR_PLUGINSDIR)
+            }
+            Some(StringSegment::Literal(text)) => {
+                text.starts_with("\\\\") || starts_with_drive_letter(text)
+            }
+            _ => false,
+        };
+
+        (!is_rooted).then(|| self.out_dir.clone())
     }
 }
 
@@ -789,8 +891,27 @@ impl<'a> Iterator for InstructionIter<'a> {
         let installer = self.installer;
 
         let instruction = match installer.normalize_opcode(entry.which()) {
+            // `CreateDirectory` and `SetOutPath` share an opcode; only the
+            // latter changes the output directory, marked by a non-zero second
+            // parameter.
+            opcode::EW_CREATEDIR if entry.offset(1) != 0 => {
+                if let Ok(target) = installer.read_string(entry.offset(0)) {
+                    self.set_out_path(target);
+                }
+                Instruction::Other(entry)
+            }
+            opcode::EW_ASSIGNVAR if entry.offset(0) == i32::from(self.spec_out_dir_var) => {
+                self.save_out_path(&entry);
+                Instruction::Other(entry)
+            }
             opcode::EW_EXTRACTFILE => {
-                let file = ExtractedFile::new(installer, entry);
+                let out_dir = match installer.read_string(entry.offset(1)) {
+                    Ok(name) => self.out_dir_for(&name),
+                    // An unreadable name is reported by `name()`; pair it with
+                    // the current directory so the file is still yielded.
+                    Err(_) => Some(self.out_dir.clone()),
+                };
+                let file = ExtractedFile::new(installer, entry, out_dir);
                 if let Err(e) = file.validate_data_bounds() {
                     return Some(Err(e));
                 }

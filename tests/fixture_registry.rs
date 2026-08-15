@@ -410,17 +410,25 @@ fn parse(fixture: &Fixture, data: &[u8]) -> NsisInstaller<'static> {
 
 /// One item of a `7z l -slt` listing.
 struct ListedItem {
-    /// Path with the archive's separator normalised away, leaving the basename.
-    basename: String,
+    /// Full path, with separators normalised to `/`.
+    path: String,
     /// `None` for entries whose data NSIS deduplicated; 7-Zip reports no size.
     size: Option<u64>,
+}
+
+/// Normalises a path for comparison.
+///
+/// Listings generated on Windows separate with `\` and those generated on
+/// Linux with `/`, while the parser renders `\` for installer paths. Comparing
+/// on one separator keeps the assertions about structure, not platform.
+fn normalize(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 /// Parses the item list out of `7z l -slt` output.
 ///
 /// The first block describes the archive itself and is skipped; item blocks
-/// begin after the `----------` separator. Listings generated on Windows use
-/// `\` separators and those generated on Linux use `/`, so both are stripped.
+/// begin after the `----------` separator.
 fn parse_listing(text: &str) -> Vec<ListedItem> {
     let mut items = Vec::new();
     let mut path: Option<String> = None;
@@ -429,8 +437,10 @@ fn parse_listing(text: &str) -> Vec<ListedItem> {
 
     let flush = |path: Option<String>, size: Option<u64>, items: &mut Vec<ListedItem>| {
         if let Some(p) = path {
-            let basename = p.rsplit(['\\', '/']).next().unwrap_or(&p).to_string();
-            items.push(ListedItem { basename, size });
+            items.push(ListedItem {
+                path: normalize(&p),
+                size,
+            });
         }
     };
 
@@ -555,41 +565,43 @@ fn extracted_files_match_the_7zip_listing() {
         // through `uninstallers()`, which `declared_metadata_matches` checks.
         let mut expected: Vec<(String, Option<u64>)> = read_listing(name)
             .into_iter()
-            .filter(|item| item.basename != "uninstall.exe")
-            .map(|item| (item.basename, item.size))
+            .filter(|item| !item.path.ends_with("uninstall.exe"))
+            .map(|item| (item.path, item.size))
             .collect();
         expected.sort();
 
+        // Full destination paths, not just names: the directory a file lands
+        // in is part of what the parser has to get right.
         let mut ours: Vec<(String, u64)> = inst
             .files()
             .map(|file| {
                 let file = file.unwrap_or_else(|e| panic!("{name}: file entry failed: {e}"));
-                let decoded = file
-                    .name()
-                    .unwrap_or_else(|e| panic!("{name}: name decode failed: {e}"))
-                    .to_string();
+                let path = file
+                    .dest_path()
+                    .unwrap_or_else(|e| panic!("{name}: dest path failed: {e}"))
+                    .to_install_path();
                 let content = file
                     .decompress()
                     .unwrap_or_else(|e| panic!("{name}: decompress failed: {e}"));
-                (decoded, content.len() as u64)
+                (normalize(&path), content.len() as u64)
             })
             .collect();
         ours.sort();
 
-        let expected_names: Vec<&String> = expected.iter().map(|(n, _)| n).collect();
-        let our_names: Vec<&String> = ours.iter().map(|(n, _)| n).collect();
+        let expected_paths: Vec<&String> = expected.iter().map(|(n, _)| n).collect();
+        let our_paths: Vec<&String> = ours.iter().map(|(n, _)| n).collect();
 
         match fixture.name_defect {
             None => {
                 assert_eq!(
-                    our_names, expected_names,
-                    "{name} ({}): extracted names differ from 7-Zip",
+                    our_paths, expected_paths,
+                    "{name} ({}): destination paths differ from 7-Zip",
                     fixture.compiler
                 );
             }
             Some(defect) => {
                 assert_ne!(
-                    our_names, expected_names,
+                    our_paths, expected_paths,
                     "{name}: names now agree with 7-Zip — the recorded defect is \
                      fixed ({defect}); drop `name_defect` from the registry"
                 );

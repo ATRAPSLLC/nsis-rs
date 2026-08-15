@@ -437,11 +437,19 @@ fn sanitize_extraction_path(rendered: &str, out: &mut String) {
     }
 }
 
-/// Returns `true` for a bare drive specifier such as `C:`.
-fn is_drive_letter(component: &str) -> bool {
-    let mut chars = component.chars();
-    matches!((chars.next(), chars.next(), chars.next()), (Some(letter), Some(':'), None)
+/// Returns `true` if `text` begins with a drive specifier such as `C:`.
+///
+/// A path that starts this way is drive-relative rather than relative to
+/// whatever directory it is joined onto.
+pub fn starts_with_drive_letter(text: &str) -> bool {
+    let mut chars = text.chars();
+    matches!((chars.next(), chars.next()), (Some(letter), Some(':'))
         if letter.is_ascii_alphabetic())
+}
+
+/// Returns `true` for a path component that is exactly a drive specifier.
+fn is_drive_letter(component: &str) -> bool {
+    component.len() == 2 && starts_with_drive_letter(component)
 }
 
 /// Appends a `u16` without going through the formatting machinery.
@@ -468,15 +476,15 @@ fn push_u16(out: &mut String, value: u16) {
 }
 
 /// `$INSTDIR`, the install directory chosen at run time.
-const VAR_INSTDIR: u16 = 21;
+pub const VAR_INSTDIR: u16 = 21;
 /// `$OUTDIR`, the current output directory.
-const VAR_OUTDIR: u16 = 22;
+pub const VAR_OUTDIR: u16 = 22;
 /// `$EXEDIR`, the directory holding the installer.
-const VAR_EXEDIR: u16 = 23;
+pub const VAR_EXEDIR: u16 = 23;
 /// `$TEMP`, the system temporary directory.
-const VAR_TEMP: u16 = 25;
+pub const VAR_TEMP: u16 = 25;
 /// `$PLUGINSDIR`, the temporary directory plugins are unpacked into.
-const VAR_PLUGINSDIR: u16 = 26;
+pub const VAR_PLUGINSDIR: u16 = 26;
 
 impl fmt::Display for NsisString {
     /// Renders the string as it appears in a decompiled script: literal text
