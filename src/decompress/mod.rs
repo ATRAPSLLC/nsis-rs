@@ -139,7 +139,43 @@ pub enum DecodeLimit {
     /// Used for the solid working buffer, which is indexed by offset to slice
     /// out individual files. Over-budget (or over-reading) streams are bounded
     /// rather than failing the whole installer.
+    ///
+    /// A truncated buffer is indistinguishable from a complete one by length
+    /// alone, so callers that need to tell them apart must read
+    /// [`Decoded::truncated`] on the decode result. The parser
+    /// does this for the solid stream and reports the outcome through
+    /// [`NsisInstaller::solid_status`](crate::installer::NsisInstaller::solid_status);
+    /// files that fall past the truncation point then fail with
+    /// [`Error::OutputTooLarge`] rather than a misleading bounds error.
     Truncate(usize),
+}
+
+/// The result of a decode that may stop early at its budget.
+///
+/// Returned by [`decompress_block`] and the per-codec entry points. Callers
+/// that only want the bytes can take [`data`](Self::data) and ignore the flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decoded {
+    /// The decompressed bytes.
+    pub data: Vec<u8>,
+    /// `true` if decoding stopped because the limit was reached while input
+    /// remained, rather than because the stream ended.
+    ///
+    /// Only [`DecodeLimit::Exact`] and [`DecodeLimit::Truncate`] can set this:
+    /// [`DecodeLimit::Capped`] rejects an over-budget stream with
+    /// [`Error::OutputTooLarge`] instead of returning a partial buffer.
+    pub truncated: bool,
+}
+
+impl Decoded {
+    /// Wraps bytes that were decoded in full.
+    #[inline]
+    pub(crate) fn complete(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            truncated: false,
+        }
+    }
 }
 
 impl DecodeLimit {
@@ -160,6 +196,13 @@ impl DecodeLimit {
 /// - `method`: the compression algorithm to use
 /// - `limit`: how the output is bounded — see [`DecodeLimit`]
 ///
+/// # Returns
+///
+/// A [`Decoded`] whose [`truncated`](Decoded::truncated) flag distinguishes a
+/// buffer that ended naturally from one that stopped at a
+/// [`DecodeLimit::Truncate`] budget. Callers that index into the result (the
+/// solid file-data stream) need this to tell truncation apart from corruption.
+///
 /// # Errors
 ///
 /// Returns [`Error::DecompressionFailed`] if decompression fails, or
@@ -169,12 +212,12 @@ pub fn decompress_block(
     data: &[u8],
     method: CompressionMethod,
     limit: DecodeLimit,
-) -> Result<Vec<u8>, Error> {
+) -> Result<Decoded, Error> {
     match method {
         CompressionMethod::Deflate => deflate::decompress_deflate(data, limit),
         CompressionMethod::Bzip2 => bzip2::decompress_bzip2(data, limit),
         CompressionMethod::Lzma => lzma::decompress_lzma(data, limit),
-        CompressionMethod::None => Ok(data.to_vec()),
+        CompressionMethod::None => Ok(Decoded::complete(data.to_vec())),
     }
 }
 
@@ -239,12 +282,12 @@ pub fn decompress_header(
     // block that overshoots the header, and LZMA frames may carry trailing
     // bytes after the EOS marker — an exact bound sidesteps both.
     let method = detect_compression(compressed_data);
-    if let Ok(decompressed) =
+    if let Ok(decoded) =
         decompress_block(compressed_data, method, DecodeLimit::Exact(expected_size))
-        && !decompressed.is_empty()
+        && !decoded.data.is_empty()
     {
         return Ok((
-            decompressed,
+            decoded.data,
             method,
             CompressionMode::NonSolid,
             non_solid_consumed,
@@ -261,12 +304,11 @@ pub fn decompress_header(
         if m == method {
             continue;
         }
-        if let Ok(decompressed) =
-            decompress_block(compressed_data, m, DecodeLimit::Exact(expected_size))
-            && !decompressed.is_empty()
+        if let Ok(decoded) = decompress_block(compressed_data, m, DecodeLimit::Exact(expected_size))
+            && !decoded.data.is_empty()
         {
             return Ok((
-                decompressed,
+                decoded.data,
                 m,
                 CompressionMode::NonSolid,
                 non_solid_consumed,
@@ -287,10 +329,8 @@ pub fn decompress_header(
     // strip them afterwards.
     let solid_expected = expected_size.saturating_add(4); // account for in-stream length prefix
     let solid_method = detect_compression(data);
-    if let Ok(decompressed) =
-        decompress_block(data, solid_method, DecodeLimit::Exact(solid_expected))
-    {
-        let stripped = strip_solid_prefix(decompressed)?;
+    if let Ok(decoded) = decompress_block(data, solid_method, DecodeLimit::Exact(solid_expected)) {
+        let stripped = strip_solid_prefix(decoded.data)?;
         // Solid: the entire stream is one blob, no separate data block offset.
         return Ok((stripped, solid_method, CompressionMode::Solid, 0));
     }
@@ -299,8 +339,8 @@ pub fn decompress_header(
         if m == solid_method {
             continue;
         }
-        if let Ok(decompressed) = decompress_block(data, m, DecodeLimit::Exact(solid_expected)) {
-            let stripped = strip_solid_prefix(decompressed)?;
+        if let Ok(decoded) = decompress_block(data, m, DecodeLimit::Exact(solid_expected)) {
+            let stripped = strip_solid_prefix(decoded.data)?;
             return Ok((stripped, m, CompressionMode::Solid, 0));
         }
     }

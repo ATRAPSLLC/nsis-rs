@@ -47,7 +47,10 @@
 
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 
-use crate::{decompress::DecodeLimit, error::Error};
+use crate::{
+    decompress::{DecodeLimit, Decoded},
+    error::Error,
+};
 
 // ---------------------------------------------------------------------------
 // Constants (from bzlib.h)
@@ -259,7 +262,12 @@ struct HuffmanTables {
 /// Returns [`Error::DecompressionFailed`] with `method: "bzip2"` if the stream
 /// is malformed, or [`Error::OutputTooLarge`] if a [`DecodeLimit::Capped`]
 /// stream exceeds its budget.
-pub fn decompress_bzip2(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u8>, Error> {
+///
+/// # Returns
+///
+/// A [`Decoded`] whose [`truncated`](Decoded::truncated) flag reports whether
+/// the budget cut the output short.
+pub fn decompress_bzip2(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded, Error> {
     // Run the decoder under `catch_unwind` so any out-of-bounds index or
     // arithmetic overflow inside the vendored algorithm surfaces as a clean
     // `DecompressionFailed` error rather than aborting the calling worker.
@@ -272,7 +280,7 @@ pub fn decompress_bzip2(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u8>
     }
 }
 
-fn decompress_bzip2_inner(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u8>, Error> {
+fn decompress_bzip2_inner(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded, Error> {
     if compressed.is_empty() {
         return Err(fail("empty input"));
     }
@@ -287,6 +295,7 @@ fn decompress_bzip2_inner(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u
 
     let mut reader = BitReader::new(compressed);
     let mut output = Vec::with_capacity(ceiling.min(BLOCK_SIZE));
+    let mut truncated = false;
 
     loop {
         // Read block header byte (0x31 = data block, 0x17 = end of stream).
@@ -302,13 +311,20 @@ fn decompress_bzip2_inner(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u
         }
 
         // Decompress one block and append its output (capped at `ceiling`).
-        decompress_block(&mut reader, &mut output, ceiling)?;
+        // The flag reports whether the block stopped early on that cap.
+        let stopped_at_cap = decompress_block(&mut reader, &mut output, ceiling)?;
 
         if output.len() >= ceiling {
             match limit {
                 // Bounded: we have the requested bytes; stop and ignore the rest.
                 DecodeLimit::Exact(n) | DecodeLimit::Truncate(n) => {
                     output.truncate(n);
+                    // Stopping mid-block means there was more to decode. A block
+                    // that ended exactly on the budget may still be the last
+                    // one, so check for the end-of-stream marker before calling
+                    // the output truncated.
+                    truncated =
+                        stopped_at_cap || reader.get_u8().is_ok_and(|header| header != 0x17);
                     break;
                 }
                 // Capped: filling to the sentinel means the stream is larger
@@ -318,18 +334,24 @@ fn decompress_bzip2_inner(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u
         }
     }
 
-    Ok(output)
+    Ok(Decoded {
+        data: output,
+        truncated,
+    })
 }
 
 /// Decompresses a single NSIS bzip2 data block.
 ///
 /// Reads the block from `reader`, performs BWT inverse transform, and appends
 /// the decoded bytes to `output`.
+///
+/// Returns `true` if the block still had bytes to emit when `max_output` was
+/// reached, i.e. the output is a prefix of the block rather than all of it.
 fn decompress_block(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
     max_output: usize,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     // --- Read origPtr (3 bytes, big-endian) ---
     let b0 = reader.get_u8()?;
     let b1 = reader.get_u8()?;
@@ -609,7 +631,8 @@ fn decompress_block(
 
     while nblock_used <= nblock {
         if output.len() >= max_output {
-            return Ok(());
+            // BWT bytes remain but there is no room for them.
+            return Ok(true);
         }
 
         if state_out_len > 0 {
@@ -622,7 +645,8 @@ fn decompress_block(
             }
             state_out_len -= emit_count as i32;
             if state_out_len > 0 || output.len() >= max_output {
-                return Ok(());
+                // Either the run was cut short or the buffer is now full.
+                return Ok(true);
             }
             continue;
         }
@@ -707,7 +731,8 @@ fn decompress_block(
         state_out_len -= 1;
     }
 
-    Ok(())
+    // Anything still pending was dropped for want of room.
+    Ok(state_out_len > 0)
 }
 
 /// Reads one Huffman-coded symbol from the bitstream.
@@ -854,7 +879,7 @@ mod tests {
         // 0x17 = end of stream immediately.
         let result = decompress_bzip2(&[0x17], DecodeLimit::Capped(1024));
         assert!(result.is_ok());
-        assert!(result.unwrap().is_empty());
+        assert!(result.unwrap().data.is_empty());
     }
 
     /// The complete solid stream from `tests/fixtures/bzip2_solid.exe`: the
@@ -878,9 +903,13 @@ mod tests {
         let out = decompress_bzip2(NSIS_SOLID_STREAM, DecodeLimit::Truncate(64 * 1024 * 1024))
             .expect("solid stream should decode");
         assert_eq!(
-            out.len(),
+            out.data.len(),
             NSIS_SOLID_DECODED_LEN,
             "decode must stop at the end of the block, not at the budget"
+        );
+        assert!(
+            !out.truncated,
+            "the stream ends on its own, well under budget"
         );
     }
 
@@ -902,7 +931,7 @@ mod tests {
         // pre-fix decoder appended `0x0A` filler here.
         let out = decompress_bzip2(NSIS_SOLID_STREAM, DecodeLimit::Truncate(64 * 1024 * 1024))
             .expect("solid stream should decode");
-        let tail = &out[out.len() - 12..];
+        let tail = &out.data[out.data.len() - 12..];
         assert_ne!(
             tail, [0x0A; 12],
             "trailing bytes should be file data, not repeated filler"
@@ -914,7 +943,8 @@ mod tests {
         // The budget still applies to streams that genuinely exceed it.
         let out = decompress_bzip2(NSIS_SOLID_STREAM, DecodeLimit::Truncate(1024))
             .expect("truncated decode should not error");
-        assert_eq!(out.len(), 1024);
+        assert_eq!(out.data.len(), 1024);
+        assert!(out.truncated, "a stream cut at the budget must report it");
     }
 
     #[test]

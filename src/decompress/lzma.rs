@@ -5,7 +5,10 @@
 
 use std::io::{self, Write};
 
-use crate::{decompress::DecodeLimit, error::Error};
+use crate::{
+    decompress::{DecodeLimit, Decoded},
+    error::Error,
+};
 
 /// A [`Write`] sink that appends to an in-memory buffer but refuses to grow
 /// past a fixed byte budget.
@@ -57,12 +60,17 @@ impl Write for LimitedWriter {
 ///   set the header size to "unknown" and rely on the EOS marker; only
 ///   [`DecodeLimit::Exact`] writes a fixed size into the LZMA header.
 ///
+/// # Returns
+///
+/// A [`Decoded`] whose [`truncated`](Decoded::truncated) flag reports whether
+/// the budget cut the output short.
+///
 /// # Errors
 ///
 /// Returns [`Error::DecompressionFailed`] if the LZMA stream is invalid, or
 /// [`Error::OutputTooLarge`] if a [`DecodeLimit::Capped`] stream exceeds its
 /// budget.
-pub fn decompress_lzma(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u8>, Error> {
+pub fn decompress_lzma(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded, Error> {
     if compressed.len() < 5 {
         return Err(Error::DecompressionFailed {
             method: "lzma",
@@ -130,7 +138,10 @@ pub fn decompress_lzma(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u8>,
         }
     }
 
-    Ok(writer.buf)
+    Ok(Decoded {
+        data: writer.buf,
+        truncated: writer.overflowed,
+    })
 }
 
 #[cfg(test)]
@@ -155,9 +166,17 @@ mod tests {
         // `Capped` (unknown size) lets the decoder honor the EOS marker.
         let out = decompress_lzma(NSIS_EOS_STREAM, DecodeLimit::Capped(64 * 1024 * 1024))
             .expect("EOS-terminated stream should decode with unknown size");
-        assert_eq!(out.len(), 1430, "decompressed size should match the icon");
         assert_eq!(
-            out.get(..4),
+            out.data.len(),
+            1430,
+            "decompressed size should match the icon"
+        );
+        assert!(
+            !out.truncated,
+            "a complete decode must not report truncation"
+        );
+        assert_eq!(
+            out.data.get(..4),
             Some(&[0x00, 0x00, 0x01, 0x00][..]),
             "should be a valid .ico header"
         );
@@ -187,6 +206,7 @@ mod tests {
     fn truncate_caps_without_error() {
         // Same under-budget stream, but `Truncate` keeps the first 512 bytes.
         let out = decompress_lzma(NSIS_EOS_STREAM, DecodeLimit::Truncate(512)).unwrap();
-        assert_eq!(out.len(), 512);
+        assert_eq!(out.data.len(), 512);
+        assert!(out.truncated, "a stream cut at the budget must report it");
     }
 }

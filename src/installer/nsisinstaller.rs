@@ -24,6 +24,37 @@ use crate::{
     strings::{self, NsisString, StringEncoding},
 };
 
+/// The outcome of decompressing an installer's solid file-data stream.
+///
+/// Solid installers hold every embedded file in one compressed stream, which
+/// the parser decodes up front under the caller's
+/// [`max_decompressed_size`](NsisInstaller::max_decompressed_size) budget. A
+/// stream that fails or overruns that budget does not fail the parse — header
+/// structures remain fully readable — so this records why the file data is
+/// absent or incomplete.
+///
+/// Read it through [`NsisInstaller::solid_status`]. Files that fall past a
+/// truncation point, or any file at all when decoding failed, report the
+/// corresponding error from [`FileIter`] and
+/// [`ExtractedFile::decompress`](crate::installer::ExtractedFile::decompress)
+/// rather than a bounds error that looks like data corruption.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SolidStatus {
+    /// The installer is not solid; file data is sliced from the original file.
+    NotSolid,
+    /// The whole solid stream decompressed within the budget.
+    Complete,
+    /// Decoding stopped at the budget. Files stored before that point are
+    /// still readable; the rest report [`Error::OutputTooLarge`].
+    Truncated {
+        /// The budget the stream was cut at, in bytes.
+        limit: usize,
+    },
+    /// Decoding failed outright, leaving no file data. Every file reports this
+    /// error.
+    Failed(Error),
+}
+
 /// Parsed NSIS installer providing access to all internal structures.
 ///
 /// The installer borrows the original file bytes (`'a` lifetime) and owns
@@ -73,6 +104,8 @@ pub struct NsisInstaller<'a> {
     /// Each file entry is framed with a 4-byte length prefix.
     /// `EW_EXTRACTFILE` `data_offset` values are byte positions into this buffer.
     solid_data: Vec<u8>,
+    /// Outcome of decompressing the solid stream (solid mode only).
+    solid_status: SolidStatus,
     /// Parsed block offsets and counts: (offset_in_header, item_count).
     blocks: [(u32, i32); 8],
     /// Common header flags.
@@ -274,7 +307,7 @@ impl<'a> NsisInstaller<'a> {
         };
 
         // Step 6: Handle data block.
-        let (data_block_offset, solid_data) = if mode == CompressionMode::Solid {
+        let (data_block_offset, solid_data, solid_status) = if mode == CompressionMode::Solid {
             // In solid mode, the entire post-FirstHeader data is one compressed
             // stream. Decompress the full stream to get the file data.
             //
@@ -297,15 +330,28 @@ impl<'a> NsisInstaller<'a> {
                 .get(..stream_len.min(after_fh.len()))
                 .unwrap_or(after_fh);
 
-            // Decompress the full stream under the caller's budget. If this
-            // fails (malformed or over budget), file extraction won't work but
-            // header parsing still succeeds — we degrade gracefully.
-            let full_stream = decompress::decompress_block(
+            // Decompress the full stream under the caller's budget. Header
+            // parsing has already succeeded, so a failure here degrades to
+            // "no file data" rather than failing the whole parse — but the
+            // reason is recorded in `solid_status` so that file access can
+            // report it instead of a misleading bounds error.
+            let (full_stream, status) = match decompress::decompress_block(
                 compressed_data,
                 compression,
                 DecodeLimit::Truncate(max_decompressed_size),
-            )
-            .unwrap_or_else(|_| Vec::new());
+            ) {
+                Ok(decoded) => {
+                    let status = if decoded.truncated {
+                        SolidStatus::Truncated {
+                            limit: max_decompressed_size,
+                        }
+                    } else {
+                        SolidStatus::Complete
+                    };
+                    (decoded.data, status)
+                }
+                Err(e) => (Vec::new(), SolidStatus::Failed(e)),
+            };
 
             // The first 4 bytes are the header length prefix, then header_data.
             // File data starts after: 4 + header_data.len()
@@ -315,14 +361,14 @@ impl<'a> NsisInstaller<'a> {
                 .map(<[u8]>::to_vec)
                 .unwrap_or_default();
 
-            (0, solid_file_data)
+            (0, solid_file_data, status)
         } else {
             // In non-solid mode, the data block follows the compressed header.
             // `header_compressed_size` already includes the 4-byte length prefix.
             let offset = first_header_file_offset
                 .saturating_add(FirstHeader::SIZE)
                 .saturating_add(header_compressed_size);
-            (offset, Vec::new())
+            (offset, Vec::new(), SolidStatus::NotSolid)
         };
 
         Ok(Self {
@@ -337,6 +383,7 @@ impl<'a> NsisInstaller<'a> {
             is_legacy,
             data_block_offset,
             solid_data,
+            solid_status,
             blocks,
             common_flags,
             langtable_size,
@@ -833,9 +880,38 @@ impl<'a> NsisInstaller<'a> {
     ///
     /// Each file entry in this buffer is framed with a 4-byte length prefix.
     /// Returns an empty slice for non-solid installers.
+    ///
+    /// An empty or short buffer is not necessarily corruption — consult
+    /// [`solid_status`](Self::solid_status) to tell a complete stream from one
+    /// that hit the decompression budget or failed to decode.
     #[inline]
     pub fn solid_data(&self) -> &[u8] {
         &self.solid_data
+    }
+
+    /// Returns how the solid file-data stream decompressed.
+    ///
+    /// Always [`SolidStatus::NotSolid`] for non-solid installers. For solid
+    /// ones it distinguishes a complete decode from a stream cut short by the
+    /// [`max_decompressed_size`](Self::max_decompressed_size) budget or one
+    /// that failed outright — neither of which fails the parse, since header
+    /// structures stay readable either way.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use nsis::{NsisInstaller, SolidStatus};
+    ///
+    /// let file = std::fs::read("installer.exe").unwrap();
+    /// let inst = NsisInstaller::from_bytes(&file).unwrap();
+    ///
+    /// if let SolidStatus::Truncated { limit } = inst.solid_status() {
+    ///     eprintln!("solid stream cut at {limit} bytes; re-parse with a larger budget");
+    /// }
+    /// ```
+    #[inline]
+    pub fn solid_status(&self) -> &SolidStatus {
+        &self.solid_status
     }
 
     /// Returns an iterator over the entries belonging to the given section.

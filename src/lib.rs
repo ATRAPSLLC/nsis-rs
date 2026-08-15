@@ -74,7 +74,7 @@ pub use installer::{
     ExecCommand, ExecIter, ExecOp, ExtractedFile, FileIter, NsisInstaller, NsisInstallerBuilder,
     PageHandler, PluginCall, PluginCallIter, RegDelete, RegRead, RegValueType, RegWrite,
     RegistryIter, RegistryOp, ScriptAnalysis, ScriptAnalysisDiagnostic, ScriptFunction, ScriptRoot,
-    ScriptRootKind, ShellExecOp, Shortcut, ShortcutIter, Uninstaller, UninstallerIter,
+    ScriptRootKind, ShellExecOp, Shortcut, ShortcutIter, SolidStatus, Uninstaller, UninstallerIter,
 };
 pub use opcode::{
     EW_ABORT, EW_ASSIGNVAR, EW_BRINGTOFRONT, EW_CALL, EW_CHDETAILSVIEW, EW_COPYFILES, EW_CREATEDIR,
