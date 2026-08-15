@@ -539,6 +539,38 @@ fn bzip2_file_extraction_solid() {
 }
 
 #[test]
+fn bzip2_solid_data_is_not_padded_to_the_budget() {
+    // Regression: the NSIS-bzip2 output loop never terminated at the end of a
+    // block, so it emitted `0x0A` filler until the decompression budget was
+    // reached. This 38 KB installer yielded 67,104,886 bytes of solid data —
+    // the whole 64 MiB default budget — instead of 89.
+    let inst = parse_fixture("bzip2_solid.exe");
+    let solid = inst.solid_data();
+
+    assert!(
+        solid.len() < 1024,
+        "solid data should be the real payload, got {} bytes (budget is {})",
+        solid.len(),
+        inst.max_decompressed_size()
+    );
+    assert!(
+        !solid.ends_with(&[0x0A; 16]),
+        "solid data should not end in repeated filler"
+    );
+
+    // The other solid fixtures hold the same two payloads; sizes should agree
+    // to within the few bytes the fixtures' build runs differ by.
+    let lzma = parse_fixture("lzma_solid.exe");
+    let delta = solid.len().abs_diff(lzma.solid_data().len());
+    assert!(
+        delta <= 8,
+        "bzip2 solid data ({} bytes) should match lzma solid data ({} bytes)",
+        solid.len(),
+        lzma.solid_data().len()
+    );
+}
+
+#[test]
 fn all_fixtures_produce_consistent_headers() {
     let fixtures = [
         "deflate_nonsolid.exe",

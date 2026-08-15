@@ -694,7 +694,11 @@ fn decompress_block(
                 output.push(state_out_ch);
             }
         }
-        // k0 is exhausted at end of block; loop condition will exit.
+        // k0 is exhausted at end of block: every BWT byte has been consumed
+        // and emitted, so the block is done. Without this the loop would spin
+        // on `nblock_used == nblock` forever, re-emitting `state_out_ch` until
+        // `max_output` (`BZ_X_OUTPUT` in `decompress.c` stops at `nblock + 1`).
+        break;
     }
 
     // Flush any remaining repeated bytes.
@@ -851,6 +855,66 @@ mod tests {
         let result = decompress_bzip2(&[0x17], DecodeLimit::Capped(1024));
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
+    }
+
+    /// The complete solid stream from `tests/fixtures/bzip2_solid.exe`: the
+    /// bytes following the FirstHeader, minus the trailing CRC32, exactly as
+    /// [`crate::installer::NsisInstaller`] hands them to the decoder. It holds
+    /// a single NSIS-bzip2 block that decodes to 4067 bytes (a 4-byte length
+    /// prefix, a 3974-byte header block, then 89 bytes of file data) and is
+    /// terminated by the `0x17` end-of-stream marker.
+    const NSIS_SOLID_STREAM: &[u8] = include_bytes!("../../tests/fixtures/bzip2_solid_stream.bin");
+
+    /// Decoded size of [`NSIS_SOLID_STREAM`].
+    const NSIS_SOLID_DECODED_LEN: usize = 4067;
+
+    #[test]
+    fn block_terminates_at_end_of_block_not_at_budget() {
+        // Regression: the BWT/RLE output loop emitted its tail bytes without
+        // advancing `nblock_used`, so `while nblock_used <= nblock` spun and
+        // re-emitted `state_out_ch` until `max_output`. A 38 KB installer
+        // produced 67,104,886 bytes — the entire 64 MiB budget — of which only
+        // the first 4067 were real and the rest was `0x0A` filler.
+        let out = decompress_bzip2(NSIS_SOLID_STREAM, DecodeLimit::Truncate(64 * 1024 * 1024))
+            .expect("solid stream should decode");
+        assert_eq!(
+            out.len(),
+            NSIS_SOLID_DECODED_LEN,
+            "decode must stop at the end of the block, not at the budget"
+        );
+    }
+
+    #[test]
+    fn capped_decode_matches_truncated_decode() {
+        // `Capped` decodes one byte past the budget to detect over-reads, so a
+        // decoder that ran past the block would raise `OutputTooLarge` here.
+        // Agreeing with `Truncate` proves the stream ends on its own.
+        let capped = decompress_bzip2(NSIS_SOLID_STREAM, DecodeLimit::Capped(64 * 1024 * 1024))
+            .expect("solid stream should decode within budget");
+        let truncated =
+            decompress_bzip2(NSIS_SOLID_STREAM, DecodeLimit::Truncate(64 * 1024 * 1024)).unwrap();
+        assert_eq!(capped, truncated);
+    }
+
+    #[test]
+    fn decoded_tail_is_file_data_not_filler() {
+        // The tail of the real stream is the last extracted file's payload. The
+        // pre-fix decoder appended `0x0A` filler here.
+        let out = decompress_bzip2(NSIS_SOLID_STREAM, DecodeLimit::Truncate(64 * 1024 * 1024))
+            .expect("solid stream should decode");
+        let tail = &out[out.len() - 12..];
+        assert_ne!(
+            tail, [0x0A; 12],
+            "trailing bytes should be file data, not repeated filler"
+        );
+    }
+
+    #[test]
+    fn truncate_below_actual_size_still_stops_at_budget() {
+        // The budget still applies to streams that genuinely exceed it.
+        let out = decompress_bzip2(NSIS_SOLID_STREAM, DecodeLimit::Truncate(1024))
+            .expect("truncated decode should not error");
+        assert_eq!(out.len(), 1024);
     }
 
     #[test]

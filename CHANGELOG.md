@@ -5,6 +5,19 @@ All notable changes to the `nsis` crate are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The NSIS-bzip2 decoder no longer emits filler until the decompression budget
+  is exhausted. Its BWT/RLE output loop wrote the tail of a block without
+  advancing the consumed-byte counter, so it re-emitted the same byte until
+  `max_output` was reached. A 38 KB solid installer decompressed to 67,104,886
+  bytes — the entire 64 MiB default budget — where the real payload is 89 bytes.
+  Every bzip2 solid installer was affected; raising `max_decompressed_size`
+  scaled the wasted allocation with it. Decoded output is unchanged; only the
+  spurious trailing filler is gone.
+
 ## [0.3.1] - 2026-08-09
 
 ### Changed
