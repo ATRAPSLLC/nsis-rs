@@ -152,6 +152,7 @@ impl RegValueType {
 /// the `CallInstDLL` instruction.
 ///
 /// Source: `exec.c` case `EW_REGISTERDLL`, 7-Zip `NsisIn.cpp` lines 4381-4412.
+#[derive(Debug)]
 pub struct PluginCall<'a> {
     installer: &'a NsisInstaller<'a>,
     entry: Entry<'a>,
@@ -208,6 +209,7 @@ impl<'a> PluginCall<'a> {
 ///   execution via `ShellExecuteEx`.
 ///
 /// Both are used by malware to launch extracted payloads after decryption.
+#[derive(Debug)]
 pub enum ExecCommand<'a> {
     /// `Exec` or `ExecWait` — direct process execution.
     Exec(ExecOp<'a>),
@@ -227,6 +229,7 @@ pub enum ExecCommand<'a> {
 /// - param 2: wait flag (0 = `Exec`, non-zero = `ExecWait`)
 ///
 /// Source: `exec.c` case `EW_EXECUTE`.
+#[derive(Debug)]
 pub struct ExecOp<'a> {
     installer: &'a NsisInstaller<'a>,
     entry: Entry<'a>,
@@ -262,6 +265,7 @@ impl<'a> ExecOp<'a> {
 /// - param 5: optional status text (string)
 ///
 /// Source: `exec.c` case `EW_SHELLEXEC`.
+#[derive(Debug)]
 pub struct ShellExecOp<'a> {
     installer: &'a NsisInstaller<'a>,
     entry: Entry<'a>,
@@ -300,6 +304,7 @@ impl<'a> ShellExecOp<'a> {
 /// Registry operations are critical for persistence analysis. Malware commonly
 /// writes to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` or similar
 /// autostart keys.
+#[derive(Debug)]
 pub enum RegistryOp<'a> {
     /// `WriteRegStr` / `WriteRegDWORD` / `WriteRegBin` / `WriteRegExpandStr`.
     Write(RegWrite<'a>),
@@ -324,6 +329,7 @@ pub enum RegistryOp<'a> {
 /// - param 5: additional flags (used to disambiguate ExpandStr and MultiStr)
 ///
 /// Source: `exec.c` case `EW_WRITEREG`, 7-Zip `NsisIn.cpp` lines 4560-4618.
+#[derive(Debug)]
 pub struct RegWrite<'a> {
     installer: &'a NsisInstaller<'a>,
     entry: Entry<'a>,
@@ -384,6 +390,7 @@ impl<'a> RegWrite<'a> {
 /// - param 4: flags (int)
 ///
 /// Source: `exec.c` case `EW_DELREG`.
+#[derive(Debug)]
 pub struct RegDelete<'a> {
     installer: &'a NsisInstaller<'a>,
     entry: Entry<'a>,
@@ -432,6 +439,7 @@ impl<'a> RegDelete<'a> {
 /// - param 4: type flag (int, determines Str vs DWORD reading)
 ///
 /// Source: `exec.c` case `EW_READREGSTR`.
+#[derive(Debug)]
 pub struct RegRead<'a> {
     installer: &'a NsisInstaller<'a>,
     entry: Entry<'a>,
@@ -477,6 +485,7 @@ impl<'a> RegRead<'a> {
 /// - param 4: packed shortcut flags and hotkey (int)
 ///
 /// Source: `exec.c` case `EW_CREATESHORTCUT`.
+#[derive(Debug)]
 pub struct Shortcut<'a> {
     installer: &'a NsisInstaller<'a>,
     entry: Entry<'a>,
@@ -533,6 +542,7 @@ impl<'a> Shortcut<'a> {
 /// - param 2: icon/patch size (int)
 ///
 /// Source: `exec.c` case `EW_WRITEUNINSTALLER`, 7-Zip `NsisIn.cpp` lines 3599-3678.
+#[derive(Debug)]
 pub struct Uninstaller<'a> {
     installer: &'a NsisInstaller<'a>,
     entry: Entry<'a>,
@@ -716,7 +726,7 @@ impl<'a> Uninstaller<'a> {
 /// [`files`]: NsisInstaller::files
 /// [`plugin_calls`]: NsisInstaller::plugin_calls
 /// [`registry_ops`]: NsisInstaller::registry_ops
-#[non_exhaustive]
+#[derive(Debug)]
 pub enum Instruction<'a> {
     /// `EW_EXTRACTFILE` — an embedded file.
     File(ExtractedFile<'a>),
@@ -776,6 +786,7 @@ impl<'a> RegistryOp<'a> {
 /// this tracks the output directory `SetOutPath` selects, which is what lets
 /// [`ExtractedFile::dest_path`](crate::installer::ExtractedFile::dest_path)
 /// report where a file is written.
+#[derive(Debug)]
 pub struct InstructionIter<'a> {
     installer: &'a NsisInstaller<'a>,
     entries: EntryIter<'a>,
@@ -945,6 +956,7 @@ impl<'a> Iterator for InstructionIter<'a> {
 macro_rules! instruction_filter {
     ($(#[$meta:meta])* $name:ident, $variant:ident, $item:ty) => {
         $(#[$meta])*
+        #[derive(Debug)]
         pub struct $name<'a>(InstructionIter<'a>);
 
         impl<'a> $name<'a> {

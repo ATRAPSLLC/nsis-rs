@@ -213,6 +213,7 @@ impl<'a> Page<'a> {
 }
 
 /// Iterator over NSIS pages in the page block.
+#[derive(Debug)]
 pub struct PageIter<'a> {
     data: &'a [u8],
     remaining: usize,

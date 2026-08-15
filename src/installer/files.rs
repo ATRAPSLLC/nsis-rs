@@ -57,6 +57,7 @@ use crate::{
 /// [`Error::OutputTooLarge`] or the underlying decode error — rather than a
 /// bounds error. See
 /// [`NsisInstaller::solid_status`](crate::installer::NsisInstaller::solid_status).
+#[derive(Debug)]
 pub struct ExtractedFile<'a> {
     installer: &'a NsisInstaller<'a>,
     entry: Entry<'a>,
@@ -369,6 +370,7 @@ impl<'a> ExtractedFile<'a> {
 ///
 /// Filters [`InstructionIter`](crate::installer::analysis::InstructionIter)
 /// down to `EW_EXTRACTFILE` entries. Created by [`NsisInstaller::files`].
+#[derive(Debug)]
 pub struct FileIter<'a>(InstructionIter<'a>);
 
 impl<'a> FileIter<'a> {

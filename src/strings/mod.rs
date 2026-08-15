@@ -172,7 +172,6 @@ pub fn encode_short(value: u16) -> (u8, u8) {
 /// the string table itself. The raw indices are kept alongside the resolved
 /// form so callers can still work from them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum StringSegment {
     /// Literal text content.
     Literal(String),
@@ -214,7 +213,6 @@ pub enum StringSegment {
 /// 7-Zip `NsisIn.cpp` `GetShellString`; Binary Refinery `xtnsis.py`
 /// `_string_code_shell`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ShellTarget {
     /// A known shell folder, named without the leading `$` (e.g. `APPDATA`).
     Csidl(&'static str),

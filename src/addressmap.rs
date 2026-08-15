@@ -27,6 +27,7 @@ use crate::error::Error;
 /// println!("Overlay starts at offset 0x{:X}", overlay.overlay_offset());
 /// println!("Overlay size: {} bytes", overlay.overlay().len());
 /// ```
+#[derive(Debug)]
 pub struct PeOverlay<'a> {
     file: &'a [u8],
     overlay_offset: usize,

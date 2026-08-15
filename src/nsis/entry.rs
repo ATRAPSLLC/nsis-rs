@@ -91,6 +91,7 @@ impl<'a> Entry<'a> {
 }
 
 /// Iterator over NSIS entries in the entry block.
+#[derive(Debug)]
 pub struct EntryIter<'a> {
     data: &'a [u8],
     remaining: usize,
