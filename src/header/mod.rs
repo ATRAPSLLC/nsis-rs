@@ -27,10 +27,12 @@
 pub mod blockheader;
 pub mod commonheader;
 pub mod firstheader;
+pub mod v1header;
 
 pub use blockheader::{BLOCKS_NUM, BlockHeader, BlockType};
 pub use commonheader::CommonHeader;
 pub use firstheader::FirstHeader;
+pub use v1header::V1Header;
 
 use crate::error::Error;
 

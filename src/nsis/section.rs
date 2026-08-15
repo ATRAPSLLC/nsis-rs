@@ -35,6 +35,32 @@ pub const SF_TOGGLED: u32 = 128;
 /// Name was changed at runtime.
 pub const SF_NAMECHG: u32 = 256;
 
+/// Which generation's section layout a section's bytes use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SectionLayout {
+    /// NSIS 2.x and 3.x: the 24-byte layout documented on [`Section`],
+    /// optionally followed by an inline name buffer.
+    Modern,
+    /// NSIS 1.x: 20 bytes, and a single `default_state` field where later
+    /// versions keep `install_types` and `flags` apart.
+    ///
+    /// | Offset | Field |
+    /// |--------|-------|
+    /// | 0x00 | `name_ptr` |
+    /// | 0x04 | `default_state` |
+    /// | 0x08 | `code` |
+    /// | 0x0C | `code_size` |
+    /// | 0x10 | `size_kb` |
+    ///
+    /// From `section` in the NSIS 1.98 `Source/exehead/fileform.h`.
+    Nsis1,
+}
+
+/// `DFS_SET` in the NSIS 1.98 headers: the section starts selected.
+const DFS_SET: u32 = 0x8000_0000;
+/// `DFS_RO` in the NSIS 1.98 headers: the section cannot be deselected.
+const DFS_RO: u32 = 0x4000_0000;
+
 /// View type for an NSIS section descriptor.
 ///
 /// The base layout is 24 bytes (6 x i32), but the actual on-disk size
@@ -55,11 +81,15 @@ pub const SF_NAMECHG: u32 = 256;
 pub struct Section<'a> {
     bytes: &'a [u8],
     is_unicode: bool,
+    layout: SectionLayout,
 }
 
 impl<'a> Section<'a> {
     /// Minimum on-disk size of a section (the 6 base i32 fields).
     pub const BASE_SIZE: usize = 24;
+
+    /// On-disk size of an NSIS 1.x section (5 i32 fields, no inline name).
+    pub const V1_SIZE: usize = 20;
 
     /// Parses a section from the start of `data`.
     ///
@@ -71,7 +101,26 @@ impl<'a> Section<'a> {
     ///
     /// Returns [`Error::TooShort`] if `data.len() < section_size`.
     pub fn parse(data: &'a [u8], section_size: usize, is_unicode: bool) -> Result<Self, Error> {
-        let size = section_size.max(Self::BASE_SIZE);
+        Self::parse_with_layout(data, section_size, is_unicode, SectionLayout::Modern)
+    }
+
+    /// Parses a section laid out for a particular NSIS generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TooShort`] if `data` is shorter than the layout needs.
+    pub fn parse_with_layout(
+        data: &'a [u8],
+        section_size: usize,
+        is_unicode: bool,
+        layout: SectionLayout,
+    ) -> Result<Self, Error> {
+        let size = match layout {
+            SectionLayout::Modern => section_size.max(Self::BASE_SIZE),
+            // 1.x sections are exactly this size: the inline name buffer that
+            // makes later sections grow does not exist yet.
+            SectionLayout::Nsis1 => Self::V1_SIZE,
+        };
         if data.len() < size {
             return Err(Error::TooShort {
                 expected: size,
@@ -86,6 +135,7 @@ impl<'a> Section<'a> {
                 context: "Section",
             })?,
             is_unicode,
+            layout,
         })
     }
 
@@ -96,33 +146,65 @@ impl<'a> Section<'a> {
     }
 
     /// Returns the install types bitmask.
+    ///
+    /// An NSIS 1.x section keeps this in the low bits of `default_state`.
     #[inline]
     pub fn install_types(&self) -> u32 {
-        read_u32_le(self.bytes, 4)
+        match self.layout {
+            SectionLayout::Modern => read_u32_le(self.bytes, 4),
+            SectionLayout::Nsis1 => read_u32_le(self.bytes, 4) & !(DFS_SET | DFS_RO),
+        }
     }
 
     /// Returns the section flags (`SF_*`).
+    ///
+    /// An NSIS 1.x section has no flags word. It carries the two states it can
+    /// express — selected and read-only — in the top bits of `default_state`,
+    /// which are reported here as the `SF_*` flags meaning the same thing. The
+    /// flags 1.x has no concept of, such as [`SF_SECGRP`], are never set.
     #[inline]
     pub fn flags(&self) -> u32 {
-        read_u32_le(self.bytes, 8)
+        match self.layout {
+            SectionLayout::Modern => read_u32_le(self.bytes, 8),
+            SectionLayout::Nsis1 => {
+                let state = read_u32_le(self.bytes, 4);
+                let mut flags = 0;
+                if state & DFS_SET != 0 {
+                    flags |= SF_SELECTED;
+                }
+                if state & DFS_RO != 0 {
+                    flags |= SF_RO;
+                }
+                flags
+            }
+        }
     }
 
     /// Returns the entry index where this section's code starts.
     #[inline]
     pub fn code(&self) -> i32 {
-        read_i32_le(self.bytes, 12)
+        read_i32_le(self.bytes, self.field_offset(12, 8))
     }
 
     /// Returns the number of entries (instructions) in this section.
     #[inline]
     pub fn code_size(&self) -> i32 {
-        read_i32_le(self.bytes, 16)
+        read_i32_le(self.bytes, self.field_offset(16, 12))
     }
 
     /// Returns the estimated disk space usage in kilobytes.
     #[inline]
     pub fn size_kb(&self) -> i32 {
-        read_i32_le(self.bytes, 20)
+        read_i32_le(self.bytes, self.field_offset(20, 16))
+    }
+
+    /// Picks between the two layouts' offsets for a field they share.
+    #[inline]
+    fn field_offset(&self, modern: usize, v1: usize) -> usize {
+        match self.layout {
+            SectionLayout::Modern => modern,
+            SectionLayout::Nsis1 => v1,
+        }
     }
 
     /// Returns the inline section name, if present.
@@ -134,6 +216,9 @@ impl<'a> Section<'a> {
     /// Returns `None` if the section has no inline name buffer (24-byte
     /// base layout only), or if the name is empty.
     pub fn inline_name(&self) -> Option<String> {
+        if self.layout == SectionLayout::Nsis1 {
+            return None;
+        }
         if self.bytes.len() <= Self::BASE_SIZE {
             return None;
         }
@@ -224,6 +309,7 @@ pub struct SectionIter<'a> {
     offset: usize,
     section_size: usize,
     is_unicode: bool,
+    layout: SectionLayout,
 }
 
 impl<'a> SectionIter<'a> {
@@ -232,11 +318,24 @@ impl<'a> SectionIter<'a> {
     /// `section_size` is the stride between entries (computed from block offsets).
     /// `is_unicode` indicates whether inline name buffers use UTF-16LE.
     pub fn new(data: &'a [u8], count: usize, section_size: usize, is_unicode: bool) -> Self {
+        Self::with_layout(data, count, section_size, is_unicode, SectionLayout::Modern)
+    }
+
+    /// Creates an iterator over sections laid out for a particular NSIS
+    /// generation.
+    pub fn with_layout(
+        data: &'a [u8],
+        count: usize,
+        section_size: usize,
+        is_unicode: bool,
+        layout: SectionLayout,
+    ) -> Self {
         Self {
             data,
             remaining: count,
             offset: 0,
             section_size,
+            layout,
             is_unicode,
         }
     }
@@ -257,7 +356,8 @@ impl<'a> Iterator for SectionIter<'a> {
                 context: "Section",
             }));
         };
-        let result = Section::parse(slice, self.section_size, self.is_unicode);
+        let result =
+            Section::parse_with_layout(slice, self.section_size, self.is_unicode, self.layout);
         self.offset = self.offset.saturating_add(self.section_size);
         Some(result)
     }
