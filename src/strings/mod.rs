@@ -13,6 +13,7 @@
 pub mod ansi;
 pub mod park;
 pub mod unicode;
+pub mod v1;
 
 use core::fmt;
 use std::borrow::Cow;
@@ -561,6 +562,10 @@ pub fn read_nsis_string(context: &StringTable<'_>, offset: usize) -> Result<Nsis
     }
 
     match context.encoding() {
+        // NSIS 1 stores ANSI bytes but encodes references entirely differently.
+        StringEncoding::Ansi if context.ansi_code_range() == AnsiCodeRange::Nsis1 => {
+            v1::read_v1_string(context, offset)
+        }
         StringEncoding::Ansi => ansi::read_ansi_string(context, offset),
         StringEncoding::Unicode => unicode::read_unicode_string(context, offset),
         StringEncoding::Park => park::read_park_string(context, offset),
@@ -673,6 +678,51 @@ impl<'a> StringTable<'a> {
         read_nsis_string(self, byte_offset)
     }
 
+    /// Returns the index of `$INSTDIR` in this installer's variable layout.
+    ///
+    /// NSIS 1 numbers its variables differently from every later version, so
+    /// the index of a built-in is a property of the table rather than a
+    /// constant — see [`strings::v1`](crate::strings::v1).
+    #[inline]
+    pub fn var_instdir(&self) -> u16 {
+        self.layout_var(VAR_INSTDIR, v1::V1_VAR_INSTDIR)
+    }
+
+    /// Returns the index of `$OUTDIR`, as [`var_instdir`](Self::var_instdir).
+    #[inline]
+    pub fn var_outdir(&self) -> u16 {
+        self.layout_var(VAR_OUTDIR, v1::V1_VAR_OUTDIR)
+    }
+
+    /// Returns the index of `$EXEDIR`, as [`var_instdir`](Self::var_instdir).
+    #[inline]
+    pub fn var_exedir(&self) -> u16 {
+        self.layout_var(VAR_EXEDIR, v1::V1_VAR_EXEDIR)
+    }
+
+    /// Returns the index of `$TEMP`, as [`var_instdir`](Self::var_instdir).
+    #[inline]
+    pub fn var_temp(&self) -> u16 {
+        self.layout_var(VAR_TEMP, v1::V1_VAR_TEMP)
+    }
+
+    /// Returns the index of `$PLUGINSDIR`, or `None` for NSIS 1, which has no
+    /// such variable — it predates plugins.
+    #[inline]
+    pub fn var_pluginsdir(&self) -> Option<u16> {
+        (self.ansi_codes != AnsiCodeRange::Nsis1).then_some(VAR_PLUGINSDIR)
+    }
+
+    /// Picks between the two layouts' index for a variable they both have.
+    #[inline]
+    fn layout_var(&self, modern: u16, v1: u16) -> u16 {
+        if self.ansi_codes == AnsiCodeRange::Nsis1 {
+            v1
+        } else {
+            modern
+        }
+    }
+
     /// Resolves a variable index to the name this installer's layout gives it.
     ///
     /// Indices below the layout's built-in count name a built-in variable;
@@ -684,6 +734,10 @@ impl<'a> StringTable<'a> {
     ///
     /// 7-Zip `NsisIn.cpp` `GetVar2` and `GET_NUM_INTERNAL_VARS`.
     pub fn variable_name(&self, index: u16) -> Cow<'static, str> {
+        // NSIS 1 has its own, shorter list, numbered differently.
+        if self.ansi_codes == AnsiCodeRange::Nsis1 {
+            return v1::variable_name_v1(index);
+        }
         // 2.03 and 2.25 layouts stop short of the modern table; anything at or
         // above their count is user-defined.
         if index >= self.internal_vars {
@@ -793,6 +847,17 @@ pub(crate) mod testing {
             DEFAULT_INTERNAL_VARS,
         )
         .variable_name(index)
+    }
+
+    /// A table over `bytes` in the NSIS 1.x encoding.
+    pub(crate) fn v1_table(bytes: &[u8]) -> StringTable<'_> {
+        StringTable::new(
+            bytes,
+            0,
+            StringEncoding::Ansi,
+            AnsiCodeRange::Nsis1,
+            DEFAULT_INTERNAL_VARS,
+        )
     }
 
     /// The segment a shell reference packed as `raw` decodes to, for tables
