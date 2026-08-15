@@ -1,0 +1,37 @@
+
+7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
+
+Scanning the drive for archives:
+1 file, 32963 bytes (33 KiB)
+
+Listing archive: nsis246_ansi_solid.exe
+
+--
+Path = nsis246_ansi_solid.exe
+Type = Nsis
+Physical Size = 32963
+Method = LZMA:23
+Solid = +
+Headers Size = 2411
+Embedded Stub Size = 32256
+SubType = NSIS-2
+
+----------
+Path = payload.txt
+Size = 53
+Packed Size = 703
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 0
+
+Path = docs\config.ini
+Size = 
+Packed Size = 
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 57
+

@@ -1,0 +1,38 @@
+
+7-Zip 25.01 (x64) : Copyright (c) 1999-2025 Igor Pavlov : 2025-08-03
+ 64-bit locale=en_US.UTF-8 Threads:56 OPEN_MAX:524288, ASM
+
+Scanning the drive for archives:
+1 file, 37657 bytes (37 KiB)
+
+Listing archive: lzma_nonsolid.exe
+
+--
+Path = lzma_nonsolid.exe
+Type = Nsis
+Physical Size = 37657
+Method = LZMA:23
+Solid = -
+Headers Size = 3978
+Embedded Stub Size = 36864
+SubType = NSIS-3 Unicode
+
+----------
+Path = payload.txt
+Size = 55
+Packed Size = 55
+Modified = 2026-04-05 06:34:22.0000000
+Attributes = 
+Method = Copy
+Solid = -
+Offset = 0
+
+Path = config.ini
+Size = 27
+Packed Size = 27
+Modified = 2026-04-05 06:34:22.0000000
+Attributes = 
+Method = Copy
+Solid = -
+Offset = 59
+

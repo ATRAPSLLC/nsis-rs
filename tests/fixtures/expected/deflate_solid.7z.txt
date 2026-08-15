@@ -1,0 +1,38 @@
+
+7-Zip 25.01 (x64) : Copyright (c) 1999-2025 Igor Pavlov : 2025-08-03
+ 64-bit locale=en_US.UTF-8 Threads:56 OPEN_MAX:524288, ASM
+
+Scanning the drive for archives:
+1 file, 40274 bytes (40 KiB)
+
+Listing archive: deflate_solid.exe
+
+--
+Path = deflate_solid.exe
+Type = Nsis
+Physical Size = 40274
+Method = Deflate
+Solid = +
+Headers Size = 3978
+Embedded Stub Size = 39424
+SubType = NSIS-3 Unicode
+
+----------
+Path = payload.txt
+Size = 55
+Packed Size = 846
+Modified = 2026-04-05 06:34:22.0000000
+Attributes = 
+Method = Deflate
+Solid = +
+Offset = 0
+
+Path = config.ini
+Size = 
+Packed Size = 
+Modified = 2026-04-05 06:34:22.0000000
+Attributes = 
+Method = Deflate
+Solid = +
+Offset = 59
+
