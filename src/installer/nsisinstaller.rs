@@ -8,10 +8,13 @@ use crate::{
     decompress::{self, CompressionMethod, CompressionMode, DecodeLimit},
     error::Error,
     header::{
-        self,
+        self, BLOCKS_NUM, V1Header,
         blockheader::BlockType,
         commonheader::CommonHeader,
-        firstheader::{FH_FLAGS_UNINSTALL, FirstHeader},
+        firstheader::{
+            FH_FLAGS_SILENT, FH_FLAGS_UNINSTALL, FH_V1_FLAGS_CRC, FH_V1_FLAGS_SILENT,
+            FH_V1_FLAGS_UNINSTALL, FirstHeader,
+        },
     },
     installer::{
         analysis::{
@@ -26,7 +29,7 @@ use crate::{
         entry::{Entry, EntryIter},
         langtable::LangTableIter,
         page::PageIter,
-        section::{Section, SectionIter},
+        section::{Section, SectionIter, SectionLayout},
     },
     opcode::{self, Nsis2SubVersion, NsisVersion, OpcodeInfo, ParamType, ParkSubVersion},
     strings::{self, NsisString, StringEncoding, StringSegment, StringTable, ansi::AnsiCodeRange},
@@ -338,44 +341,84 @@ impl<'a> NsisInstaller<'a> {
         let (header_data, compression, mode, header_compressed_size) =
             decompress::decompress_header(after_fh, expected_size)?;
 
-        // Step 4: Parse the common header and extract all values before
-        // moving header_data into the struct (CommonHeader borrows header_data).
-        let (blocks, common_flags, langtable_size, callbacks, header_strings) = {
-            let common_header = CommonHeader::parse(&header_data)?;
-            let mut blocks = [(0u32, 0i32); 8];
-            for (block, bh) in blocks.iter_mut().zip(common_header.blocks().iter()) {
-                *block = (bh.offset(), bh.num());
-            }
-            let callbacks = [
-                common_header.code_on_init(),
-                common_header.code_on_inst_success(),
-                common_header.code_on_inst_failed(),
-                common_header.code_on_user_abort(),
-                common_header.code_on_gui_init(),
-                common_header.code_on_gui_end(),
-                common_header.code_on_mouse_over_section(),
-                common_header.code_on_verify_inst_dir(),
-                common_header.code_on_sel_change(),
-                common_header.code_on_reboot_failed(),
-            ];
-            let header_strings = HeaderStrings {
-                install_dir: common_header.install_dir_ptr(),
-                install_dir_auto_append: common_header.install_dir_auto_append_ptr(),
-                install_reg_key: common_header.install_reg_key_ptr(),
-                install_reg_value: common_header.install_reg_value_ptr(),
-                install_reg_rootkey: common_header.install_reg_rootkey(),
-                uninstall_child: common_header.uninstall_child_ptr(),
-                uninstall_command: common_header.uninstall_command_ptr(),
-                wininit: common_header.wininit_ptr(),
+        // Step 4: Parse the header. NSIS 1.x has no block table — its tables
+        // are laid end to end after a fixed struct — so which layout applies
+        // has to be worked out from whether the header reads consistently
+        // under it. The modern layout is tried first: every NSIS since 2.0
+        // writes it, and a 1.x header fails its block-offset checks.
+        let (blocks, common_flags, langtable_size, callbacks, header_strings, is_v1) =
+            match CommonHeader::parse(&header_data) {
+                Ok(common_header) => {
+                    let mut blocks = [(0u32, 0i32); BLOCKS_NUM];
+                    for (block, bh) in blocks.iter_mut().zip(common_header.blocks().iter()) {
+                        *block = (bh.offset(), bh.num());
+                    }
+                    let callbacks = [
+                        common_header.code_on_init(),
+                        common_header.code_on_inst_success(),
+                        common_header.code_on_inst_failed(),
+                        common_header.code_on_user_abort(),
+                        common_header.code_on_gui_init(),
+                        common_header.code_on_gui_end(),
+                        common_header.code_on_mouse_over_section(),
+                        common_header.code_on_verify_inst_dir(),
+                        common_header.code_on_sel_change(),
+                        common_header.code_on_reboot_failed(),
+                    ];
+                    let header_strings = HeaderStrings {
+                        install_dir: common_header.install_dir_ptr(),
+                        install_dir_auto_append: common_header.install_dir_auto_append_ptr(),
+                        install_reg_key: common_header.install_reg_key_ptr(),
+                        install_reg_value: common_header.install_reg_value_ptr(),
+                        install_reg_rootkey: common_header.install_reg_rootkey(),
+                        uninstall_child: common_header.uninstall_child_ptr(),
+                        uninstall_command: common_header.uninstall_command_ptr(),
+                        wininit: common_header.wininit_ptr(),
+                    };
+                    (
+                        blocks,
+                        common_header.flags(),
+                        common_header.langtable_size(),
+                        callbacks,
+                        header_strings,
+                        false,
+                    )
+                }
+                // Report the modern layout's error if this is not a 1.x header
+                // either: that is far more often the real diagnosis.
+                Err(modern) => {
+                    let v1 = V1Header::parse(&header_data).map_err(|_| modern)?;
+                    let v1_callbacks = v1.callbacks();
+                    let callback_at = |i: usize| v1_callbacks.get(i).copied().unwrap_or(-1);
+                    let callbacks = [
+                        callback_at(0), // .onInit
+                        callback_at(1), // .onInstSuccess
+                        callback_at(2), // .onInstFailed
+                        callback_at(3), // .onUserAbort
+                        // 1.x has no GUI or mouse-over callbacks. Its page
+                        // callbacks, .onNextPage and .onPrevPage, have no
+                        // counterpart either: the page system replaced them.
+                        -1,
+                        -1,
+                        -1,
+                        callback_at(6), // .onVerifyInstDir
+                        callback_at(7), // .onSelChange
+                        -1,
+                    ];
+                    let header_strings = HeaderStrings {
+                        install_dir: v1.install_dir_ptr(),
+                        install_reg_key: v1.install_reg_key_ptr(),
+                        install_reg_value: v1.install_reg_value_ptr(),
+                        install_reg_rootkey: v1.install_reg_rootkey(),
+                        // None of these exist in 1.x.
+                        install_dir_auto_append: -1,
+                        uninstall_child: -1,
+                        uninstall_command: -1,
+                        wininit: -1,
+                    };
+                    (v1.block_layout(), 0, 0, callbacks, header_strings, true)
+                }
             };
-            (
-                blocks,
-                common_header.flags(),
-                common_header.langtable_size(),
-                callbacks,
-                header_strings,
-            )
-        };
 
         // Compute section size from block header gaps (7-Zip NsisIn.cpp line 5260).
         let (sec_off_raw, sec_count_raw) = blocks
@@ -411,7 +454,16 @@ impl<'a> NsisInstaller<'a> {
             strings::detect_encoding(string_table)
         };
 
-        let version = NsisVersion::detect(encoding, is_legacy, string_table);
+        // A 1.x header settles the version on its own: the layout is unique to
+        // it, and 1.x is ANSI-only with its own string encoding.
+        let (version, encoding) = if is_v1 {
+            (NsisVersion::V1, StringEncoding::Ansi)
+        } else {
+            (
+                NsisVersion::detect(encoding, is_legacy, string_table),
+                encoding,
+            )
+        };
         let ansi_codes = AnsiCodeRange::for_version(version);
 
         // Step 5b: Detect Park sub-version by scanning entries.
@@ -431,8 +483,9 @@ impl<'a> NsisInstaller<'a> {
         // in the header says which build produced the file, so both layouts
         // are read and the one the entry block is consistent with wins. Park
         // has its own insertions and is normalised separately.
-        let log_build =
-            version != NsisVersion::Park && detect_log_build(&header_data, ent_offset, ent_count);
+        // 1.x has its own opcode table, which the log instruction predates.
+        let log_build = !matches!(version, NsisVersion::Park | NsisVersion::V1)
+            && detect_log_build(&header_data, ent_offset, ent_count);
 
         // Step 5d: NSIS 2 moved its built-in variables around, so an ANSI
         // NSIS-2 installer needs its variable layout pinned down before any
@@ -477,7 +530,13 @@ impl<'a> NsisInstaller<'a> {
             // and exclude the CRC to avoid LZMA "trailing bytes" errors.
             let nsis_data_len = (first_header.length_of_all_following_data() as usize)
                 .saturating_sub(FirstHeader::SIZE);
-            let has_crc = !first_header.has_no_crc();
+            // 1.x spends bit 0 on saying the CRC is present; later versions
+            // spend bit 2 on saying it is absent.
+            let has_crc = if version == NsisVersion::V1 {
+                first_header.flags() & FH_V1_FLAGS_CRC != 0
+            } else {
+                !first_header.has_no_crc()
+            };
             let stream_len = if has_crc {
                 nsis_data_len.saturating_sub(4)
             } else {
@@ -602,7 +661,28 @@ impl<'a> NsisInstaller<'a> {
     /// Returns `true` if this is an uninstaller.
     #[inline]
     pub fn is_uninstaller(&self) -> bool {
-        self.first_header_flags & FH_FLAGS_UNINSTALL != 0
+        self.first_header_flags & self.flag_uninstall() != 0
+    }
+
+    /// Returns `true` if this installer runs silently.
+    #[inline]
+    pub fn is_silent(&self) -> bool {
+        let bit = if self.version == NsisVersion::V1 {
+            FH_V1_FLAGS_SILENT
+        } else {
+            FH_FLAGS_SILENT
+        };
+        self.first_header_flags & bit != 0
+    }
+
+    /// Returns the flag bit that means "uninstaller" for this version.
+    #[inline]
+    fn flag_uninstall(&self) -> u32 {
+        if self.version == NsisVersion::V1 {
+            FH_V1_FLAGS_UNINSTALL
+        } else {
+            FH_FLAGS_UNINSTALL
+        }
     }
 
     /// Returns `true` if this is a legacy NSIS 1.x installer.
@@ -671,18 +751,23 @@ impl<'a> NsisInstaller<'a> {
             self.encoding,
             StringEncoding::Unicode | StringEncoding::Park
         );
-        SectionIter::new(
+        SectionIter::with_layout(
             self.block_data(BlockType::Sections),
             count.max(0) as usize,
             self.section_size,
             is_unicode,
+            self.section_layout(),
         )
     }
 
     /// Returns an iterator over bytecode entries (instructions).
     pub fn entries(&self) -> EntryIter<'_> {
         let (_, count) = self.block_info(BlockType::Entries);
-        EntryIter::new(self.block_data(BlockType::Entries), count.max(0) as usize)
+        EntryIter::with_stride(
+            self.block_data(BlockType::Entries),
+            count.max(0) as usize,
+            self.entry_size(),
+        )
     }
 
     /// Returns an iterator over installer pages.
@@ -839,7 +924,11 @@ impl<'a> NsisInstaller<'a> {
         let (_, count) = self.block_info(BlockType::Entries);
         InstructionIter::new(
             self,
-            EntryIter::new(self.block_data(BlockType::Entries), count.max(0) as usize),
+            EntryIter::with_stride(
+                self.block_data(BlockType::Entries),
+                count.max(0) as usize,
+                self.entry_size(),
+            ),
         )
     }
 
@@ -860,9 +949,7 @@ impl<'a> NsisInstaller<'a> {
     /// }
     /// ```
     pub fn files(&self) -> FileIter<'_> {
-        let (_, count) = self.block_info(BlockType::Entries);
-        let entries = EntryIter::new(self.block_data(BlockType::Entries), count.max(0) as usize);
-        FileIter::new(self, entries)
+        FileIter::new(self, self.entries())
     }
 
     /// Normalizes a raw opcode to its V2-equivalent number.
@@ -882,6 +969,9 @@ impl<'a> NsisInstaller<'a> {
         }
         if self.log_build {
             return opcode::normalize_log_opcode(raw as u32) as i32;
+        }
+        if self.version == NsisVersion::V1 {
+            return opcode::canonical_opcode(raw as u32);
         }
         raw
     }
@@ -906,7 +996,30 @@ impl<'a> NsisInstaller<'a> {
         if which < 0 {
             return None;
         }
+        if self.version == NsisVersion::V1 {
+            // 1.x numbers its instructions differently from every later
+            // version, so its table is a separate one rather than a shift.
+            return opcode::lookup_v1(which as u32);
+        }
         opcode::lookup(self.normalize_opcode(which) as u32)
+    }
+
+    /// Returns the on-disk size of one entry for this installer's version.
+    #[inline]
+    fn entry_size(&self) -> usize {
+        match self.version {
+            NsisVersion::V1 => Entry::V1_SIZE,
+            _ => Entry::SIZE,
+        }
+    }
+
+    /// Returns the section layout this installer's version writes.
+    #[inline]
+    fn section_layout(&self) -> SectionLayout {
+        match self.version {
+            NsisVersion::V1 => SectionLayout::Nsis1,
+            _ => SectionLayout::Modern,
+        }
     }
 
     /// Formats an entry as a single script-like line.
@@ -1105,8 +1218,11 @@ impl<'a> NsisInstaller<'a> {
         // Some opcodes carry several script commands and choose between them
         // with an operand, so the layout is resolved per entry rather than
         // taken from the opcode alone.
-        let layout =
-            opcode::param_layout(self.normalize_opcode(entry.which()) as u32, info, &offsets);
+        let layout = if self.version == NsisVersion::V1 {
+            opcode::param_layout_v1(entry.which().max(0) as u32, info, &offsets)
+        } else {
+            opcode::param_layout(self.normalize_opcode(entry.which()) as u32, info, &offsets)
+        };
         let count = layout.count as usize;
         if count == 0 {
             return;
@@ -1291,17 +1407,19 @@ impl<'a> NsisInstaller<'a> {
     /// slice the entries block.
     pub fn section_entries(&self, section: &Section<'_>) -> EntryIter<'_> {
         let (block_offset, _) = self.block_info(BlockType::Entries);
+        let stride = self.entry_size();
         let code = section.code().max(0) as usize;
         let count = section.code_size().max(0) as usize;
+        let empty = EntryIter::with_stride(&[], 0, stride);
         let Some(byte_offset) = code
-            .checked_mul(Entry::SIZE)
+            .checked_mul(stride)
             .and_then(|n| n.checked_add(block_offset as usize))
         else {
-            return EntryIter::new(&[], 0);
+            return empty;
         };
         match self.header_data.get(byte_offset..) {
-            Some(slice) => EntryIter::new(slice, count),
-            None => EntryIter::new(&[], 0),
+            Some(slice) => EntryIter::with_stride(slice, count, stride),
+            None => empty,
         }
     }
 
@@ -1458,7 +1576,11 @@ impl<'a> NsisInstaller<'a> {
 
     fn make_entry_iter(&self) -> EntryIter<'_> {
         let (_, count) = self.block_info(BlockType::Entries);
-        EntryIter::new(self.block_data(BlockType::Entries), count.max(0) as usize)
+        EntryIter::with_stride(
+            self.block_data(BlockType::Entries),
+            count.max(0) as usize,
+            self.entry_size(),
+        )
     }
 }
 

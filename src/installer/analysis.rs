@@ -45,10 +45,7 @@ use crate::{
     installer::{ExtractedFile, NsisInstaller},
     nsis::entry::{Entry, EntryIter},
     opcode::{self, Nsis2SubVersion},
-    strings::{
-        NsisString, StringSegment, VAR_EXEDIR, VAR_INSTDIR, VAR_OUTDIR, VAR_PLUGINSDIR, VAR_TEMP,
-        starts_with_drive_letter,
-    },
+    strings::{NsisString, StringSegment, starts_with_drive_letter},
 };
 
 /// Index of `$_OUTDIR` in NSIS 2.26 and later, which NSIS 3 inherited.
@@ -815,24 +812,42 @@ pub struct InstructionIter<'a> {
     saved_out_dir: Option<Vec<StringSegment>>,
     /// Index of the internal `$_OUTDIR` variable, which moved in NSIS 2.26.
     spec_out_dir_var: u16,
+    /// Index of `$OUTDIR` in this installer's variable layout.
+    out_dir_var: u16,
+    /// Indices of the variables that name a location of their own, so a file
+    /// starting with one is not relative to the output directory.
+    ///
+    /// `None` for a variable this installer's version does not have.
+    rooted_vars: [Option<u16>; 4],
 }
 
 impl<'a> InstructionIter<'a> {
     pub(crate) fn new(installer: &'a NsisInstaller<'a>, entries: EntryIter<'a>) -> Self {
+        let table = installer.string_table();
+        let instdir = table.var_instdir();
         Self {
             installer,
             entries,
             // Installers write to `$INSTDIR` until told otherwise.
             out_dir: NsisString {
                 segments: vec![StringSegment::Variable {
-                    index: VAR_INSTDIR,
-                    name: installer.string_table().variable_name(VAR_INSTDIR),
+                    index: instdir,
+                    name: table.variable_name(instdir),
                 }],
             },
             saved_out_dir: None,
             spec_out_dir_var: installer
                 .nsis2_sub_version()
                 .map_or(SPEC_OUT_DIR_VAR, Nsis2SubVersion::spec_outdir_var_index),
+            // Which index names which variable depends on the layout, so these
+            // are read from the table rather than assumed.
+            out_dir_var: table.var_outdir(),
+            rooted_vars: [
+                Some(instdir),
+                Some(table.var_exedir()),
+                Some(table.var_temp()),
+                table.var_pluginsdir(),
+            ],
         }
     }
 
@@ -845,7 +860,7 @@ impl<'a> InstructionIter<'a> {
     fn set_out_path(&mut self, target: NsisString) {
         let mut segments = target.segments.into_iter();
         let base = match segments.next() {
-            Some(StringSegment::Variable { index, .. }) if index == VAR_OUTDIR => {
+            Some(StringSegment::Variable { index, .. }) if index == self.out_dir_var => {
                 self.out_dir.segments.clone()
             }
             Some(StringSegment::Variable { index, .. }) if index == self.spec_out_dir_var => {
@@ -878,7 +893,7 @@ impl<'a> InstructionIter<'a> {
             .is_ok_and(|source| {
                 matches!(
                     source.segments.as_slice(),
-                    [StringSegment::Variable { index, .. }] if *index == VAR_OUTDIR
+                    [StringSegment::Variable { index, .. }] if *index == self.out_dir_var
                 )
             });
 
@@ -893,9 +908,7 @@ impl<'a> InstructionIter<'a> {
     /// output directory does not apply to it.
     fn out_dir_for(&self, name: &NsisString) -> Option<NsisString> {
         let is_rooted = match name.segments.first() {
-            Some(StringSegment::Variable { index, .. }) => {
-                matches!(*index, VAR_INSTDIR | VAR_EXEDIR | VAR_TEMP | VAR_PLUGINSDIR)
-            }
+            Some(StringSegment::Variable { index, .. }) => self.rooted_vars.contains(&Some(*index)),
             Some(StringSegment::Literal(text)) => {
                 text.starts_with("\\\\") || starts_with_drive_letter(text)
             }
