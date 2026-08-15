@@ -12,10 +12,7 @@
 
 use crate::{
     error::Error,
-    header::{
-        NsisVersionHint,
-        blockheader::{BLOCKS_NUM, BlockHeader, BlockType, EMPTY_BLOCK},
-    },
+    header::blockheader::{BLOCKS_NUM, BlockHeader, BlockType, EMPTY_BLOCK},
     util::{read_i32_le, read_u32_le},
 };
 
@@ -60,20 +57,16 @@ pub const COMMON_HEADER_MIN_SIZE: usize = 4 + (BLOCKS_NUM * BlockHeader::SIZE);
 pub struct CommonHeader<'a> {
     bytes: &'a [u8],
     blocks: [BlockHeader<'a>; BLOCKS_NUM],
-    version: NsisVersionHint,
 }
 
 impl<'a> CommonHeader<'a> {
     /// Parses the common header from the start of the decompressed header data.
     ///
-    /// The `version_hint` guides layout selection. If `Unknown`, the parser
-    /// tries the standard layout and validates block headers.
-    ///
     /// # Errors
     ///
     /// - [`Error::TooShort`] if `data` is smaller than the minimum header size
     /// - [`Error::InvalidBlockOffset`] if any block header points outside `data`
-    pub fn parse(data: &'a [u8], version_hint: NsisVersionHint) -> Result<Self, Error> {
+    pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
         if data.len() < COMMON_HEADER_MIN_SIZE {
             return Err(Error::TooShort {
                 expected: COMMON_HEADER_MIN_SIZE,
@@ -121,7 +114,6 @@ impl<'a> CommonHeader<'a> {
         Ok(Self {
             bytes: data,
             blocks,
-            version: version_hint,
         })
     }
 
@@ -148,12 +140,6 @@ impl<'a> CommonHeader<'a> {
     #[inline]
     pub fn blocks(&self) -> &[BlockHeader<'a>; BLOCKS_NUM] {
         &self.blocks
-    }
-
-    /// Returns the detected (or hinted) NSIS version.
-    #[inline]
-    pub fn version(&self) -> NsisVersionHint {
-        self.version
     }
 
     /// Returns the install registry root key.
@@ -339,25 +325,23 @@ mod tests {
     fn parse_minimal_valid() {
         let blocks = [(0, 0); BLOCKS_NUM];
         let data = make_common_header(0, &blocks);
-        let ch = CommonHeader::parse(&data, NsisVersionHint::Unknown).unwrap();
+        let ch = CommonHeader::parse(&data).unwrap();
         assert_eq!(ch.flags(), 0);
-        assert_eq!(ch.version(), NsisVersionHint::Unknown);
     }
 
     #[test]
     fn parse_with_flags() {
         let blocks = [(0, 0); BLOCKS_NUM];
         let data = make_common_header(CH_FLAGS_SILENT | CH_FLAGS_AUTO_CLOSE, &blocks);
-        let ch = CommonHeader::parse(&data, NsisVersionHint::Nsis3x).unwrap();
+        let ch = CommonHeader::parse(&data).unwrap();
         assert!(ch.is_silent());
         assert!(ch.is_auto_close());
-        assert_eq!(ch.version(), NsisVersionHint::Nsis3x);
     }
 
     #[test]
     fn parse_too_short() {
         let data = [0u8; COMMON_HEADER_MIN_SIZE - 1];
-        assert!(CommonHeader::parse(&data, NsisVersionHint::Unknown).is_err());
+        assert!(CommonHeader::parse(&data).is_err());
     }
 
     #[test]
@@ -367,7 +351,7 @@ mod tests {
         blocks[BlockType::Sections as usize] = (100, 3);
         let mut data = make_common_header(0, &blocks);
         data.resize(200, 0xAA);
-        let ch = CommonHeader::parse(&data, NsisVersionHint::Unknown).unwrap();
+        let ch = CommonHeader::parse(&data).unwrap();
         let section_data = ch.block_data(BlockType::Sections, &data).unwrap();
         assert_eq!(section_data.len(), 100); // 200 - 100
     }
@@ -377,7 +361,7 @@ mod tests {
         let mut blocks = [(0u32, 0i32); BLOCKS_NUM];
         blocks[BlockType::Entries as usize] = (9999, 1);
         let data = make_common_header(0, &blocks);
-        let ch = CommonHeader::parse(&data, NsisVersionHint::Unknown);
+        let ch = CommonHeader::parse(&data);
         assert!(ch.is_err());
     }
 
@@ -389,7 +373,7 @@ mod tests {
         // Manually set the flags.
         let mut data = data;
         data[0..4].copy_from_slice(&0u32.to_le_bytes());
-        let ch = CommonHeader::parse(&data, NsisVersionHint::Unknown).unwrap();
+        let ch = CommonHeader::parse(&data).unwrap();
         let _ = blocks; // suppress unused warning for test clarity
         assert_eq!(ch.code_on_init(), -1);
         assert_eq!(ch.code_on_inst_success(), -1);
