@@ -33,8 +33,15 @@ pub struct Entry<'a> {
 }
 
 impl<'a> Entry<'a> {
-    /// The on-disk size of an entry in bytes.
+    /// The on-disk size of an entry in bytes, in NSIS 2.x and 3.x.
     pub const SIZE: usize = 28;
+
+    /// The on-disk size of an entry in bytes, in NSIS 1.x.
+    ///
+    /// 1.x gives an instruction five parameter slots where later versions give
+    /// six (`MAX_ENTRY_OFFSETS` in its `Source/exehead/fileform.h`), so its
+    /// entries are one `int` shorter.
+    pub const V1_SIZE: usize = 24;
 
     /// Parses an entry from the start of `data`.
     ///
@@ -42,16 +49,22 @@ impl<'a> Entry<'a> {
     ///
     /// Returns [`Error::TooShort`] if `data.len() < 28`.
     pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        if data.len() < Self::SIZE {
-            return Err(Error::TooShort {
-                expected: Self::SIZE,
-                actual: data.len(),
-                context: "Entry",
-            });
-        }
+        Self::parse_sized(data, Self::SIZE)
+    }
+
+    /// Parses an entry of `size` bytes from the start of `data`.
+    ///
+    /// The sixth parameter of an [`V1_SIZE`](Self::V1_SIZE) entry reads as `0`,
+    /// which is what it means: 1.x instructions have five parameters, and the
+    /// opcode table gives none of them a sixth.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TooShort`] if `data` is shorter than `size`.
+    pub fn parse_sized(data: &'a [u8], size: usize) -> Result<Self, Error> {
         Ok(Self {
-            bytes: data.get(..Self::SIZE).ok_or(Error::TooShort {
-                expected: Self::SIZE,
+            bytes: data.get(..size).ok_or(Error::TooShort {
+                expected: size,
                 actual: data.len(),
                 context: "Entry",
             })?,
@@ -77,6 +90,8 @@ impl<'a> Entry<'a> {
     }
 
     /// Returns all 6 parameter offsets.
+    ///
+    /// The sixth is always `0` for an NSIS 1.x entry, which stores five.
     #[inline]
     pub fn offsets(&self) -> [i32; MAX_ENTRY_OFFSETS] {
         [
@@ -96,6 +111,7 @@ pub struct EntryIter<'a> {
     data: &'a [u8],
     remaining: usize,
     offset: usize,
+    stride: usize,
 }
 
 impl<'a> EntryIter<'a> {
@@ -103,10 +119,18 @@ impl<'a> EntryIter<'a> {
     ///
     /// `count` is the number of entries (from the block header's `num` field).
     pub fn new(data: &'a [u8], count: usize) -> Self {
+        Self::with_stride(data, count, Entry::SIZE)
+    }
+
+    /// Creates an iterator over entries of `stride` bytes each.
+    ///
+    /// Use [`Entry::V1_SIZE`] for an NSIS 1.x entry block.
+    pub fn with_stride(data: &'a [u8], count: usize, stride: usize) -> Self {
         Self {
             data,
             remaining: count,
             offset: 0,
+            stride: stride.max(1),
         }
     }
 }
@@ -120,8 +144,8 @@ impl<'a> Iterator for EntryIter<'a> {
         }
         self.remaining = self.remaining.saturating_sub(1);
         let slice = self.data.get(self.offset..).unwrap_or(&[]);
-        let result = Entry::parse(slice);
-        self.offset = self.offset.saturating_add(Entry::SIZE);
+        let result = Entry::parse_sized(slice, self.stride);
+        self.offset = self.offset.saturating_add(self.stride);
         Some(result)
     }
 
