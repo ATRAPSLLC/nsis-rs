@@ -495,11 +495,21 @@ impl<'a> Shortcut<'a> {
     /// Returns the path of the `.lnk` shortcut file.
     ///
     /// Typically in `$DESKTOP`, `$SMPROGRAMS`, or `$SMSTARTUP`.
+    ///
+    /// Render it with
+    /// [`to_install_path`](crate::strings::NsisString::to_install_path) or, to
+    /// place it under an extraction directory,
+    /// [`to_path`](crate::strings::NsisString::to_path).
     pub fn link_path(&self) -> Result<NsisString, Error> {
         self.installer.read_string(self.entry.offset(0))
     }
 
     /// Returns the shortcut target executable path.
+    ///
+    /// Render it with
+    /// [`to_install_path`](crate::strings::NsisString::to_install_path) or, to
+    /// place it under an extraction directory,
+    /// [`to_path`](crate::strings::NsisString::to_path).
     pub fn target(&self) -> Result<NsisString, Error> {
         self.installer.read_string(self.entry.offset(1))
     }
@@ -550,6 +560,11 @@ pub struct Uninstaller<'a> {
 
 impl<'a> Uninstaller<'a> {
     /// Returns the path where the uninstaller will be written.
+    ///
+    /// Render it with
+    /// [`to_install_path`](crate::strings::NsisString::to_install_path) or, to
+    /// place it under an extraction directory,
+    /// [`to_path`](crate::strings::NsisString::to_path).
     pub fn path(&self) -> Result<NsisString, Error> {
         self.installer.read_string(self.entry.offset(0))
     }

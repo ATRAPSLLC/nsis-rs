@@ -239,6 +239,28 @@ pub enum ShellTarget {
 }
 
 /// A decoded NSIS string composed of literal and special-code segments.
+///
+/// # Rendering
+///
+/// Every string this crate returns is one of these, and paths in particular
+/// have three renderings that are not interchangeable:
+///
+/// | Rendering | Result | Use for |
+/// |---|---|---|
+/// | [`Display`](fmt::Display) | `$INSTDIR\docs\readme.txt` | showing a script the way a decompiler would |
+/// | [`to_install_path`](Self::to_install_path) | `docs\readme.txt` | the path the installer writes, as 7-Zip lists it |
+/// | [`to_path`](Self::to_path) | `docs/readme.txt` | joining onto an output directory |
+///
+/// Only [`to_path`](Self::to_path) is safe to join onto a directory: it strips
+/// drive letters, UNC prefixes and `..` components, which the other two
+/// deliberately preserve. Reaching for `to_string()` on a path is almost always
+/// the wrong choice.
+///
+/// This applies to every path-shaped value in the crate —
+/// [`ExtractedFile::dest_path`](crate::installer::ExtractedFile::dest_path),
+/// [`NsisInstaller::install_dir`](crate::installer::NsisInstaller::install_dir),
+/// [`Shortcut::link_path`](crate::installer::Shortcut::link_path),
+/// [`Uninstaller::path`](crate::installer::Uninstaller::path) and the rest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NsisString {
     /// The segments that make up this string.
