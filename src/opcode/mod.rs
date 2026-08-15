@@ -13,7 +13,10 @@
 pub mod info;
 pub mod version;
 
-use crate::{nsis::entry::Entry, util::read_i32_le};
+use crate::{
+    nsis::entry::{Entry, MAX_ENTRY_OFFSETS},
+    util::read_i32_le,
+};
 
 pub use info::OpcodeInfo;
 pub use version::{Nsis2SubVersion, NsisVersion, ParkSubVersion};
@@ -147,22 +150,30 @@ pub const EW_FINDNEXT: i32 = 60;
 pub const EW_FINDFIRST: i32 = 61;
 /// WriteUninstaller.
 pub const EW_WRITEUNINSTALLER: i32 = 62;
-/// LogText / LogSet.
-pub const EW_LOG: i32 = 63;
 /// SectionSet / GetText / Flags.
-pub const EW_SECTIONSET: i32 = 64;
+pub const EW_SECTIONSET: i32 = 63;
 /// InstTypeSet / GetFlags.
-pub const EW_INSTTYPESET: i32 = 65;
-/// GetOSInfo / GetKnownFolderPath.
-pub const EW_GETOSINFO: i32 = 66;
+pub const EW_INSTTYPESET: i32 = 64;
+/// GetOSInfo / GetKnownFolderPath (NSIS 3.06+).
+pub const EW_GETOSINFO: i32 = 65;
 /// Reserved / free slot.
-pub const EW_RESERVEDOPCODE: i32 = 67;
+pub const EW_RESERVEDOPCODE: i32 = 66;
 /// Lock / unlock window updates.
-pub const EW_LOCKWINDOW: i32 = 68;
+pub const EW_LOCKWINDOW: i32 = 67;
 /// FileWriteUTF16LE.
-pub const EW_FPUTWS: i32 = 69;
+pub const EW_FPUTWS: i32 = 68;
 /// FileReadUTF16LE.
-pub const EW_FGETWS: i32 = 70;
+pub const EW_FGETWS: i32 = 69;
+
+// The opcodes below are never stored in an installer. NSIS compiles some
+// instructions conditionally, which shifts the numbering of everything after
+// them, so this crate translates those layouts into the one above and uses
+// these slots for the instructions that only exist in a conditional build.
+
+/// LogText / LogSet, present only in a build compiled with logging.
+pub const EW_LOG: i32 = 70;
+/// FindProc, present only in the Park fork.
+pub const EW_FINDPROC: i32 = 71;
 
 /// Normalizes a Park raw opcode to its V2-equivalent opcode number.
 ///
@@ -211,6 +222,104 @@ pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
     }
 
     a
+}
+
+/// Translates a raw opcode from a log-enabled build into the main layout.
+///
+/// NSIS compiles the log instructions conditionally. A build with logging has
+/// an extra opcode between `EW_WRITEUNINSTALLER` and `EW_SECTIONSET`, so every
+/// opcode from that point on is stored one higher than in a standard build.
+/// This maps that raw number back: the inserted slot becomes [`EW_LOG`], and
+/// everything above it shifts down by one.
+///
+/// Applies to non-Park installers only; Park has its own insertions, handled by
+/// [`normalize_park_opcode`].
+///
+/// # Source
+///
+/// 7-Zip `NsisIn.cpp` `GetCmd`, the `LogCmdIsEnabled` branch.
+pub fn normalize_log_opcode(raw: u32) -> u32 {
+    let boundary = EW_SECTIONSET as u32;
+    if raw < boundary {
+        raw
+    } else if raw == boundary {
+        EW_LOG as u32
+    } else {
+        raw.saturating_sub(1)
+    }
+}
+
+/// Reports whether an entry block can be read under the given opcode layout.
+///
+/// Returns the lowest opcode that contradicts the layout, or `None` if the
+/// whole block is consistent with it. An opcode contradicts the layout when it
+/// is not in the table, when it is one that no installer stores, or — the
+/// telling case — when the entry passes **more parameters than that opcode
+/// takes**. Conditional compilation shifts opcode numbers, so reading a block
+/// under the wrong layout tends to land instructions on opcodes whose
+/// parameter counts do not fit.
+///
+/// `resolve` maps a raw opcode to its table entry under the layout being
+/// tested.
+///
+/// # Source
+///
+/// 7-Zip `NsisIn.cpp` `FindBadCmd`.
+pub fn find_bad_opcode(
+    header_data: &[u8],
+    entry_block_offset: usize,
+    entry_count: usize,
+    resolve: impl Fn(u32) -> Option<&'static OpcodeInfo>,
+) -> Option<u32> {
+    let mut worst: Option<u32> = None;
+
+    for i in 0..entry_count {
+        let Some(offset) = i
+            .checked_mul(Entry::SIZE)
+            .and_then(|n| n.checked_add(entry_block_offset))
+        else {
+            break;
+        };
+        let Some(end) = offset.checked_add(Entry::SIZE) else {
+            break;
+        };
+        if end > header_data.len() {
+            break;
+        }
+
+        let raw = read_i32_le(header_data, offset);
+        let Ok(raw) = u32::try_from(raw) else {
+            continue;
+        };
+        if worst.is_some_and(|bad| raw >= bad) {
+            continue;
+        }
+
+        let Some(info) = resolve(raw) else {
+            worst = Some(raw);
+            continue;
+        };
+        // Slots the crate uses for translation are never stored in a file.
+        if info.mnemonic == "EW_LOG" || info.mnemonic == "EW_FINDPROC" {
+            worst = Some(raw);
+            continue;
+        }
+
+        // Highest parameter slot the entry actually uses.
+        let used = (0..MAX_ENTRY_OFFSETS)
+            .rev()
+            .find(|n| {
+                let slot = 4_usize.saturating_add(4_usize.saturating_mul(*n));
+                read_i32_le(header_data, offset.saturating_add(slot)) != 0
+            })
+            .map_or(0, |n| n.saturating_add(1));
+
+        if used > info.param_count as usize {
+            worst = Some(raw);
+        }
+    }
+
+    worst
 }
 
 /// Detects which NSIS 2.x variable layout an installer uses.
@@ -425,6 +534,79 @@ mod tests {
             200 => Some(22),
             _ => None,
         }
+    }
+
+    #[test]
+    fn log_builds_shift_every_opcode_above_the_boundary() {
+        // Below the boundary the two layouts agree.
+        assert_eq!(normalize_log_opcode(EW_WRITEUNINSTALLER as u32), 62);
+        // The inserted instruction itself.
+        assert_eq!(normalize_log_opcode(63), EW_LOG as u32);
+        // Everything above it is stored one higher than the main layout.
+        assert_eq!(normalize_log_opcode(64), EW_SECTIONSET as u32);
+        assert_eq!(normalize_log_opcode(66), EW_GETOSINFO as u32);
+        assert_eq!(normalize_log_opcode(70), EW_FGETWS as u32);
+    }
+
+    #[test]
+    fn a_consistent_block_contradicts_no_layout() {
+        let data = entry_block(&[
+            (EW_CREATEDIR, [1, 1, 0, 0, 0, 0]),
+            (EW_EXTRACTFILE, [0, 2, 3, 0, 0, 0]),
+            (EW_RET, [0; 6]),
+        ]);
+        assert_eq!(
+            find_bad_opcode(&data, 0, 3, |raw| lookup(NsisVersion::V3, raw)),
+            None
+        );
+    }
+
+    #[test]
+    fn too_many_parameters_contradicts_the_layout() {
+        // `EW_RET` takes none, so an entry passing one cannot be a return.
+        let data = entry_block(&[(EW_RET, [0, 0, 0, 0, 0, 7])]);
+        assert_eq!(
+            find_bad_opcode(&data, 0, 1, |raw| lookup(NsisVersion::V3, raw)),
+            Some(EW_RET as u32)
+        );
+    }
+
+    #[test]
+    fn translation_only_opcodes_contradict_the_layout() {
+        // No installer stores these; seeing one means the layout is wrong.
+        for slot in [EW_LOG, EW_FINDPROC] {
+            let data = entry_block(&[(slot, [0; 6])]);
+            assert_eq!(
+                find_bad_opcode(&data, 0, 1, |raw| lookup(NsisVersion::V3, raw)),
+                Some(slot as u32),
+                "{slot} should not appear in a file"
+            );
+        }
+    }
+
+    #[test]
+    fn the_log_layout_resolves_a_block_the_standard_one_cannot() {
+        // A log-enabled build stores SectionSet at 64 and LockWindow at 68.
+        // Read as a standard build, 64 is InstTypeSet (4 parameters) and 68 is
+        // FileWriteUTF16LE (4) — both fit, so this block alone is ambiguous.
+        // Raw 70 is the giveaway: standard reads it as a translation-only slot.
+        let data = entry_block(&[
+            (64, [1, 2, 3, 0, 0, 0]),
+            (70, [1, 2, 0, 0, 0, 0]), // FileReadUTF16LE in a log build
+        ]);
+
+        assert!(
+            find_bad_opcode(&data, 0, 2, |raw| lookup(NsisVersion::V3, raw)).is_some(),
+            "the standard layout should not explain this block"
+        );
+        assert_eq!(
+            find_bad_opcode(&data, 0, 2, |raw| lookup(
+                NsisVersion::V3,
+                normalize_log_opcode(raw)
+            )),
+            None,
+            "the log layout should explain it"
+        );
     }
 
     #[test]

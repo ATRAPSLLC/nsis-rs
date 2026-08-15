@@ -469,8 +469,33 @@ fn opcode_constants_live_in_the_opcode_module() {
     // flooding the crate root with 70 names.
     assert_eq!(
         [EW_INVALID_OPCODE, EW_RET, EW_CALL, EW_FGETWS],
-        [0, 1, 5, 70]
+        [0, 1, 5, 69]
     );
+}
+
+#[test]
+fn opcode_numbering_matches_the_layout_installers_store() {
+    use nsis::opcode::{
+        EW_FGETWS, EW_FINDPROC, EW_FPUTWS, EW_GETOSINFO, EW_INSTTYPESET, EW_LOCKWINDOW, EW_LOG,
+        EW_SECTIONSET, EW_WRITEUNINSTALLER,
+    };
+
+    // A standard makensis compiles the log instructions out, so nothing sits
+    // between WriteUninstaller and SectionSet. Numbering them as if the log
+    // opcode were always present shifts every later instruction by one, which
+    // renamed SectionSet to Log, GetOsInfo to InstTypeSet, and so on.
+    assert_eq!(EW_WRITEUNINSTALLER, 62);
+    assert_eq!(EW_SECTIONSET, 63);
+    assert_eq!(EW_INSTTYPESET, 64);
+    assert_eq!(EW_GETOSINFO, 65);
+    assert_eq!(EW_LOCKWINDOW, 67);
+    assert_eq!(EW_FPUTWS, 68);
+    assert_eq!(EW_FGETWS, 69);
+
+    // The conditional instructions get slots above everything an installer
+    // stores, so a normalised opcode is unambiguous.
+    const { assert!(EW_LOG > EW_FGETWS) };
+    const { assert!(EW_FINDPROC > EW_LOG) };
 }
 
 #[test]

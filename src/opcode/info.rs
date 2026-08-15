@@ -48,7 +48,7 @@ use ParamType::{Int, Jump, String, Unused, Variable};
 ///
 /// Parameter types are derived from the NSIS source (`exec.c`) and the
 /// 7-Zip NSIS handler (`NsisIn.cpp`).
-pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
+pub static OPCODES_NSIS2: [OpcodeInfo; 72] = [
     OpcodeInfo {
         mnemonic: "EW_INVALID_OPCODE",
         param_count: 0,
@@ -91,7 +91,7 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
     },
     OpcodeInfo {
         mnemonic: "EW_CALL",
-        param_count: 1,
+        param_count: 2,
         param_names: ["address", "", "", "", "", ""],
         param_types: [Jump, Unused, Unused, Unused, Unused, Unused],
         description: "Call subroutine",
@@ -99,7 +99,7 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
     },
     OpcodeInfo {
         mnemonic: "EW_UPDATETEXT",
-        param_count: 2,
+        param_count: 6,
         param_names: ["text", "flag", "", "", "", ""],
         param_types: [String, Int, Unused, Unused, Unused, Unused],
         description: "Update status text",
@@ -306,7 +306,7 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
     },
     OpcodeInfo {
         mnemonic: "EW_PUSHPOP",
-        param_count: 3,
+        param_count: 6,
         param_names: ["var_or_str", "pop_or_push", "exch", "", "", ""],
         param_types: [String, Int, Int, Unused, Unused, Unused],
         description: "Push/Pop/Exch",
@@ -410,7 +410,7 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
     },
     OpcodeInfo {
         mnemonic: "EW_REGISTERDLL",
-        param_count: 4,
+        param_count: 6,
         param_names: ["dll", "function", "register", "nounload", "", ""],
         param_types: [String, String, Int, Int, Unused, Unused],
         description: "RegisterDLL/plugin call",
@@ -418,7 +418,7 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
     },
     OpcodeInfo {
         mnemonic: "EW_CREATESHORTCUT",
-        param_count: 5,
+        param_count: 6,
         param_names: ["link", "target", "params", "icon", "packed_cs", ""],
         param_types: [String, String, String, String, Int, Unused],
         description: "CreateShortcut",
@@ -442,7 +442,7 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
     },
     OpcodeInfo {
         mnemonic: "EW_WRITEINI",
-        param_count: 4,
+        param_count: 5,
         param_names: ["section", "name", "value", "ini_file", "", ""],
         param_types: [String, String, String, String, Unused, Unused],
         description: "WriteINIStr",
@@ -466,9 +466,9 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
     },
     OpcodeInfo {
         mnemonic: "EW_WRITEREG",
-        param_count: 5,
-        param_names: ["root", "keyname", "itemname", "data", "typelen", ""],
-        param_types: [Int, String, String, String, Int, Unused],
+        param_count: 6,
+        param_names: ["root", "keyname", "itemname", "data", "typelen", "flags"],
+        param_types: [Int, String, String, String, Int, Int],
         description: "WriteRegStr/DWORD/Bin",
         category: "registry",
     },
@@ -554,23 +554,15 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
     },
     OpcodeInfo {
         mnemonic: "EW_WRITEUNINSTALLER",
-        param_count: 3,
+        param_count: 4,
         param_names: ["name", "offset", "icon_size", "", "", ""],
         param_types: [String, Int, Int, Unused, Unused, Unused],
         description: "WriteUninstaller",
         category: "file",
     },
     OpcodeInfo {
-        mnemonic: "EW_LOG",
-        param_count: 2,
-        param_names: ["type", "text", "", "", "", ""],
-        param_types: [Int, String, Unused, Unused, Unused, Unused],
-        description: "LogText/LogSet",
-        category: "misc",
-    },
-    OpcodeInfo {
         mnemonic: "EW_SECTIONSET",
-        param_count: 3,
+        param_count: 5,
         param_names: ["idx", "op", "data", "", "", ""],
         param_types: [Int, Int, Int, Unused, Unused, Unused],
         description: "SectionSet/GetText/Flags",
@@ -578,7 +570,7 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
     },
     OpcodeInfo {
         mnemonic: "EW_INSTTYPESET",
-        param_count: 3,
+        param_count: 4,
         param_names: ["idx", "op", "flags", "", "", ""],
         param_types: [Int, Int, Int, Unused, Unused, Unused],
         description: "InstTypeSet/GetFlags",
@@ -586,7 +578,7 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
     },
     OpcodeInfo {
         mnemonic: "EW_GETOSINFO",
-        param_count: 2,
+        param_count: 6,
         param_names: ["operation", "varies", "", "", "", ""],
         param_types: [Int, Int, Unused, Unused, Unused, Unused],
         description: "GetOSInfo/GetKnownFolderPath",
@@ -594,7 +586,7 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
     },
     OpcodeInfo {
         mnemonic: "EW_RESERVEDOPCODE",
-        param_count: 0,
+        param_count: 2,
         param_names: ["", "", "", "", "", ""],
         param_types: [Unused, Unused, Unused, Unused, Unused, Unused],
         description: "Reserved/free slot",
@@ -623,6 +615,25 @@ pub static OPCODES_NSIS2: [OpcodeInfo; 71] = [
         param_types: [Variable, Variable, String, Int, Unused, Unused],
         description: "FileReadUTF16LE",
         category: "file_io",
+    },
+    // The entries below are not opcodes an installer stores. They are slots
+    // this crate translates conditional layouts into, so that a caller sees one
+    // numbering whatever the installer was compiled with.
+    OpcodeInfo {
+        mnemonic: "EW_LOG",
+        param_count: 2,
+        param_names: ["type", "text", "", "", "", ""],
+        param_types: [Int, String, Unused, Unused, Unused, Unused],
+        description: "LogText/LogSet (log-enabled builds only)",
+        category: "misc",
+    },
+    OpcodeInfo {
+        mnemonic: "EW_FINDPROC",
+        param_count: 2,
+        param_names: ["result", "process", "", "", "", ""],
+        param_types: [Variable, String, Unused, Unused, Unused, Unused],
+        description: "FindProc (Park fork)",
+        category: "process",
     },
 ];
 

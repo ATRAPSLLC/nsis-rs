@@ -27,6 +27,7 @@ use crate::{
     },
     opcode::{self, Nsis2SubVersion, NsisVersion, OpcodeInfo, ParkSubVersion, info::ParamType},
     strings::{self, NsisString, StringEncoding, StringSegment, StringTable, ansi::AnsiCodeRange},
+    util::read_i32_le,
 };
 
 /// The outcome of decompressing an installer's solid file-data stream.
@@ -58,6 +59,66 @@ pub enum SolidStatus {
     /// Decoding failed outright, leaving no file data. Every file reports this
     /// error.
     Failed(Error),
+}
+
+/// Decides whether an entry block reads as a log-enabled build.
+///
+/// A build compiled with logging stores every opcode above
+/// `EW_WRITEUNINSTALLER` one higher than a standard build does, and nothing in
+/// the header records which produced the file. Both layouts are checked against
+/// the entry block; the standard one is assumed unless it is contradicted and
+/// the log layout is not.
+///
+/// The check is 7-Zip's: an opcode that takes fewer parameters than the entry
+/// passes cannot be the right reading. An installer that uses no opcode above
+/// the boundary is consistent with both, and reads identically either way.
+fn detect_log_build(
+    header_data: &[u8],
+    entry_block_offset: usize,
+    entry_count: usize,
+    version: NsisVersion,
+) -> bool {
+    // The two layouts agree below `EW_SECTIONSET`, so an installer that never
+    // reaches that far reads identically either way and needs no scan at all.
+    // That covers most scripts.
+    if !uses_shiftable_opcode(header_data, entry_block_offset, entry_count) {
+        return false;
+    }
+
+    let standard = opcode::find_bad_opcode(header_data, entry_block_offset, entry_count, |raw| {
+        opcode::lookup(version, raw)
+    });
+    if standard.is_none() {
+        return false;
+    }
+
+    let with_log = opcode::find_bad_opcode(header_data, entry_block_offset, entry_count, |raw| {
+        opcode::lookup(version, opcode::normalize_log_opcode(raw))
+    });
+    with_log.is_none()
+}
+
+/// Returns `true` if any entry uses an opcode the log build would shift.
+fn uses_shiftable_opcode(
+    header_data: &[u8],
+    entry_block_offset: usize,
+    entry_count: usize,
+) -> bool {
+    (0..entry_count).any(|i| {
+        let Some(offset) = i
+            .checked_mul(Entry::SIZE)
+            .and_then(|n| n.checked_add(entry_block_offset))
+        else {
+            return false;
+        };
+        if offset
+            .checked_add(Entry::SIZE)
+            .is_none_or(|end| end > header_data.len())
+        {
+            return false;
+        }
+        read_i32_le(header_data, offset) >= opcode::EW_SECTIONSET
+    })
 }
 
 /// String-table offsets from the tail of the common header.
@@ -154,6 +215,8 @@ pub struct NsisInstaller<'a> {
     park_sub: Option<ParkSubVersion>,
     /// NSIS 2 variable layout (only meaningful when `version == V2`).
     nsis2_sub: Option<Nsis2SubVersion>,
+    /// Whether the compiler was built with logging, which shifts opcodes.
+    log_build: bool,
     /// Maximum decompressed size budget for unknown-size streams.
     ///
     /// Applied per decompression call to embedded files, the solid file-data
@@ -352,7 +415,15 @@ impl<'a> NsisInstaller<'a> {
             None
         };
 
-        // Step 5c: NSIS 2 moved its built-in variables around, so an ANSI
+        // Step 5c: a makensis compiled with logging carries an extra opcode,
+        // which shifts every instruction above `EW_WRITEUNINSTALLER`. Nothing
+        // in the header says which build produced the file, so both layouts
+        // are read and the one the entry block is consistent with wins. Park
+        // has its own insertions and is normalised separately.
+        let log_build = version != NsisVersion::Park
+            && detect_log_build(&header_data, ent_offset, ent_count, version);
+
+        // Step 5d: NSIS 2 moved its built-in variables around, so an ANSI
         // NSIS-2 installer needs its variable layout pinned down before any
         // variable reference can be decoded correctly.
         let nsis2_sub = if version == NsisVersion::V2 {
@@ -468,6 +539,7 @@ impl<'a> NsisInstaller<'a> {
             callbacks,
             park_sub,
             nsis2_sub,
+            log_build,
             max_decompressed_size,
         })
     }
@@ -796,7 +868,22 @@ impl<'a> NsisInstaller<'a> {
         {
             return opcode::normalize_park_opcode(raw as u32, sub) as i32;
         }
+        if self.log_build {
+            return opcode::normalize_log_opcode(raw as u32) as i32;
+        }
         raw
+    }
+
+    /// Returns `true` if this installer was built by a makensis compiled with
+    /// logging support.
+    ///
+    /// Those builds carry an extra instruction that shifts every opcode above
+    /// `EW_WRITEUNINSTALLER` by one. [`normalize_opcode`](Self::normalize_opcode)
+    /// undoes the shift, so this is only worth reading to know what produced
+    /// the file.
+    #[inline]
+    pub fn is_log_build(&self) -> bool {
+        self.log_build
     }
 
     /// Resolves an opcode index to its metadata.
@@ -807,7 +894,7 @@ impl<'a> NsisInstaller<'a> {
         if which < 0 {
             return None;
         }
-        opcode::lookup_normalized(self.version, which as u32, self.park_sub)
+        opcode::lookup(self.version, self.normalize_opcode(which) as u32)
     }
 
     /// Formats an entry as a single script-like line.
@@ -886,6 +973,13 @@ impl<'a> NsisInstaller<'a> {
             .take(count)
             .enumerate()
         {
+            // Parameter counts are the maximum an opcode has taken across NSIS
+            // versions, so an instruction compiled by a modern makensis leaves
+            // the extra slots unused. Show a slot this crate has no name for
+            // only when it actually carries something.
+            if name.is_empty() && val == 0 {
+                continue;
+            }
             match ptype {
                 ParamType::String => parts.push(format_param(name, self.format_string_param(val))),
                 ParamType::Variable => {
@@ -1000,6 +1094,13 @@ impl<'a> NsisInstaller<'a> {
             .take(count)
             .enumerate()
         {
+            // Parameter counts are the maximum an opcode has taken across NSIS
+            // versions, so an instruction compiled by a modern makensis leaves
+            // the extra slots unused. Show a slot this crate has no name for
+            // only when it actually carries something.
+            if name.is_empty() && val == 0 {
+                continue;
+            }
             match ptype {
                 ParamType::String => parts.push(format_param(name, self.format_string_param(val))),
                 ParamType::Variable => {
