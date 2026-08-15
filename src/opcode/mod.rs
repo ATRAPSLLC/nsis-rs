@@ -18,7 +18,7 @@ use crate::{
     util::read_i32_le,
 };
 
-pub use info::OpcodeInfo;
+pub use info::{OpcodeInfo, ParamLayout, ParamType, param_layout};
 pub use version::{Nsis2SubVersion, NsisVersion, ParkSubVersion};
 
 // Opcode indices from `fileform.h`.
@@ -260,7 +260,10 @@ pub fn normalize_log_opcode(raw: u32) -> u32 {
 /// parameter counts do not fit.
 ///
 /// `resolve` maps a raw opcode to its table entry under the layout being
-/// tested.
+/// tested, and returns `None` for a raw value that layout cannot produce —
+/// including the translation-only slots, which are never stored in a file.
+/// [`standard_layout`] and [`log_layout`] are the two resolvers this crate
+/// uses.
 ///
 /// # Source
 ///
@@ -299,11 +302,6 @@ pub fn find_bad_opcode(
             worst = Some(raw);
             continue;
         };
-        // Slots the crate uses for translation are never stored in a file.
-        if info.mnemonic == "EW_LOG" || info.mnemonic == "EW_FINDPROC" {
-            worst = Some(raw);
-            continue;
-        }
 
         // Highest parameter slot the entry actually uses.
         let used = (0..MAX_ENTRY_OFFSETS)
@@ -320,6 +318,29 @@ pub fn find_bad_opcode(
     }
 
     worst
+}
+
+/// Resolves a raw opcode as a standard build stores it.
+///
+/// Returns `None` at or above [`EW_LOG`], the first translation-only slot: a
+/// standard build's instructions stop below it, so a raw value there means the
+/// block is not a standard build.
+pub fn standard_layout(raw: u32) -> Option<&'static OpcodeInfo> {
+    if raw >= EW_LOG as u32 {
+        return None;
+    }
+    lookup(raw)
+}
+
+/// Resolves a raw opcode as a logging-enabled build stores it.
+///
+/// That build has one more instruction than a standard one, so its raw values
+/// run one higher and reach [`EW_LOG`] itself.
+pub fn log_layout(raw: u32) -> Option<&'static OpcodeInfo> {
+    if raw > EW_LOG as u32 {
+        return None;
+    }
+    lookup(normalize_log_opcode(raw))
 }
 
 /// Detects which NSIS 2.x variable layout an installer uses.
@@ -542,46 +563,51 @@ mod tests {
             (EW_EXTRACTFILE, [0, 2, 3, 0, 0, 0]),
             (EW_RET, [0; 6]),
         ]);
-        assert_eq!(find_bad_opcode(&data, 0, 3, lookup), None);
+        assert_eq!(find_bad_opcode(&data, 0, 3, standard_layout), None);
     }
 
     #[test]
     fn too_many_parameters_contradicts_the_layout() {
         // `EW_RET` takes none, so an entry passing one cannot be a return.
         let data = entry_block(&[(EW_RET, [0, 0, 0, 0, 0, 7])]);
-        assert_eq!(find_bad_opcode(&data, 0, 1, lookup), Some(EW_RET as u32));
+        assert_eq!(
+            find_bad_opcode(&data, 0, 1, standard_layout),
+            Some(EW_RET as u32)
+        );
     }
 
     #[test]
-    fn translation_only_opcodes_contradict_the_layout() {
-        // No installer stores these; seeing one means the layout is wrong.
+    fn translation_only_opcodes_contradict_the_standard_layout() {
+        // A standard build's instructions stop below the translation slots, so
+        // a raw value there means the block is not a standard build.
         for slot in [EW_LOG, EW_FINDPROC] {
             let data = entry_block(&[(slot, [0; 6])]);
             assert_eq!(
-                find_bad_opcode(&data, 0, 1, lookup),
+                find_bad_opcode(&data, 0, 1, standard_layout),
                 Some(slot as u32),
-                "{slot} should not appear in a file"
+                "raw {slot} should not read as a standard build"
             );
         }
     }
 
     #[test]
     fn the_log_layout_resolves_a_block_the_standard_one_cannot() {
-        // A log-enabled build stores SectionSet at 64 and LockWindow at 68.
-        // Read as a standard build, 64 is InstTypeSet (4 parameters) and 68 is
-        // FileWriteUTF16LE (4) — both fit, so this block alone is ambiguous.
-        // Raw 70 is the giveaway: standard reads it as a translation-only slot.
+        // A log-enabled build stores SectionSet at 64 and FileReadUTF16LE at
+        // 70. Read as a standard build, 64 is InstTypeSet (4 parameters) and
+        // fits, so that entry alone is ambiguous. Raw 70 is the giveaway: it
+        // sits at the first translation-only slot, which no standard build
+        // stores.
         let data = entry_block(&[
             (64, [1, 2, 3, 0, 0, 0]),
             (70, [1, 2, 0, 0, 0, 0]), // FileReadUTF16LE in a log build
         ]);
 
         assert!(
-            find_bad_opcode(&data, 0, 2, lookup).is_some(),
+            find_bad_opcode(&data, 0, 2, standard_layout).is_some(),
             "the standard layout should not explain this block"
         );
         assert_eq!(
-            find_bad_opcode(&data, 0, 2, |raw| lookup(normalize_log_opcode(raw))),
+            find_bad_opcode(&data, 0, 2, log_layout),
             None,
             "the log layout should explain it"
         );

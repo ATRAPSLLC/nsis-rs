@@ -83,15 +83,22 @@ fn detect_log_build(header_data: &[u8], entry_block_offset: usize, entry_count: 
         return false;
     }
 
-    let standard =
-        opcode::find_bad_opcode(header_data, entry_block_offset, entry_count, opcode::lookup);
+    let standard = opcode::find_bad_opcode(
+        header_data,
+        entry_block_offset,
+        entry_count,
+        opcode::standard_layout,
+    );
     if standard.is_none() {
         return false;
     }
 
-    let with_log = opcode::find_bad_opcode(header_data, entry_block_offset, entry_count, |raw| {
-        opcode::lookup(opcode::normalize_log_opcode(raw))
-    });
+    let with_log = opcode::find_bad_opcode(
+        header_data,
+        entry_block_offset,
+        entry_count,
+        opcode::log_layout,
+    );
     with_log.is_none()
 }
 
