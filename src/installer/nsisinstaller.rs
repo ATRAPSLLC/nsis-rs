@@ -5,14 +5,16 @@ use crate::{
     decompress::{self, CompressionMethod, CompressionMode, DecodeLimit},
     error::Error,
     header::{
-        self, NsisVersionHint, blockheader::BlockType, commonheader::CommonHeader,
-        firstheader::FirstHeader,
+        self, NsisVersionHint,
+        blockheader::BlockType,
+        commonheader::CommonHeader,
+        firstheader::{FH_FLAGS_UNINSTALL, FirstHeader},
     },
     installer::{
         analysis::{ExecIter, PluginCallIter, RegistryIter, ShortcutIter, UninstallerIter},
         callback::Callback,
         files::FileIter,
-        script::ScriptAnalysis,
+        script::{self, ScriptAnalysis},
     },
     nsis::{
         entry::{Entry, EntryIter},
@@ -20,7 +22,7 @@ use crate::{
         page::PageIter,
         section::{Section, SectionIter},
     },
-    opcode::{self, NsisVersion, ParkSubVersion, info::ParamType},
+    opcode::{self, NsisVersion, OpcodeInfo, ParkSubVersion, info::ParamType},
     strings::{self, NsisString, StringEncoding},
 };
 
@@ -429,7 +431,7 @@ impl<'a> NsisInstaller<'a> {
     /// Returns `true` if this is an uninstaller.
     #[inline]
     pub fn is_uninstaller(&self) -> bool {
-        self.first_header_flags & crate::header::firstheader::FH_FLAGS_UNINSTALL != 0
+        self.first_header_flags & FH_FLAGS_UNINSTALL != 0
     }
 
     /// Returns `true` if this is a legacy NSIS 1.x installer.
@@ -598,11 +600,11 @@ impl<'a> NsisInstaller<'a> {
     ///
     /// For Park version, the raw opcode is first normalized to its V2
     /// equivalent before lookup.
-    pub fn resolve_opcode(&self, which: i32) -> Option<&'static crate::opcode::OpcodeInfo> {
+    pub fn resolve_opcode(&self, which: i32) -> Option<&'static OpcodeInfo> {
         if which < 0 {
             return None;
         }
-        crate::opcode::lookup_normalized(self.version, which as u32, self.park_sub)
+        opcode::lookup_normalized(self.version, which as u32, self.park_sub)
     }
 
     /// Formats an entry as a single script-like line.
@@ -840,7 +842,7 @@ impl<'a> NsisInstaller<'a> {
     /// }
     /// ```
     pub fn script_analysis(&self) -> Result<ScriptAnalysis, Error> {
-        crate::installer::script::analyze(self)
+        script::analyze(self)
     }
 
     fn format_pushpop_params(&self, entry: &Entry<'_>) -> String {

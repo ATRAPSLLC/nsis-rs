@@ -14,6 +14,13 @@
 
 use std::{collections::HashSet, env, fs, path::Path, process};
 
+use nsis::{
+    ExecCommand, NsisInstaller, RegistryOp,
+    nsis::page::{
+        PF_BACK_SHOW, PF_CANCEL_ENABLE, PF_LICENSE_FORCE_SELECTION, PF_NEXT_ENABLE, PF_PAGE_EX,
+    },
+};
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -32,7 +39,7 @@ fn main() {
         process::exit(1);
     });
 
-    let installer = nsis::NsisInstaller::from_bytes(&data).unwrap_or_else(|e| {
+    let installer = NsisInstaller::from_bytes(&data).unwrap_or_else(|e| {
         eprintln!("error parsing NSIS installer: {e}");
         process::exit(1);
     });
@@ -116,19 +123,19 @@ fn main() {
 
                 let mut details = Vec::new();
                 let flags = p.flags();
-                if flags & nsis::nsis::page::PF_BACK_SHOW != 0 {
+                if flags & PF_BACK_SHOW != 0 {
                     details.push("back");
                 }
-                if flags & nsis::nsis::page::PF_NEXT_ENABLE != 0 {
+                if flags & PF_NEXT_ENABLE != 0 {
                     details.push("next");
                 }
-                if flags & nsis::nsis::page::PF_CANCEL_ENABLE != 0 {
+                if flags & PF_CANCEL_ENABLE != 0 {
                     details.push("cancel");
                 }
-                if flags & nsis::nsis::page::PF_LICENSE_FORCE_SELECTION != 0 {
+                if flags & PF_LICENSE_FORCE_SELECTION != 0 {
                     details.push("license_must_accept");
                 }
-                if flags & nsis::nsis::page::PF_PAGE_EX != 0 {
+                if flags & PF_PAGE_EX != 0 {
                     details.push("PageEx");
                 }
                 if !details.is_empty() {
@@ -219,12 +226,12 @@ fn main() {
     println!("Exec Commands:");
     for c in installer.exec_commands().flatten() {
         match c {
-            nsis::ExecCommand::Exec(op) => {
+            ExecCommand::Exec(op) => {
                 let wait = if op.is_wait() { "ExecWait" } else { "Exec" };
                 let cmdline = op.command_line().map(|n| n.to_string()).unwrap_or_default();
                 println!("  {wait}: {cmdline}");
             }
-            nsis::ExecCommand::ShellExec(op) => {
+            ExecCommand::ShellExec(op) => {
                 let verb = op.verb().map(|n| n.to_string()).unwrap_or_default();
                 let file = op.file().map(|n| n.to_string()).unwrap_or_default();
                 println!("  ShellExec: {verb} {file}");
@@ -236,7 +243,7 @@ fn main() {
     println!("Registry Operations:");
     for o in installer.registry_ops().flatten() {
         match o {
-            nsis::RegistryOp::Write(w) => {
+            RegistryOp::Write(w) => {
                 let key = w.key().map(|n| n.to_string()).unwrap_or_default();
                 let vname = w.value_name().map(|n| n.to_string()).unwrap_or_default();
                 let data = w.data().map(|n| n.to_string()).unwrap_or_default();
@@ -249,12 +256,12 @@ fn main() {
                     w.reg_type()
                 );
             }
-            nsis::RegistryOp::Delete(d) => {
+            RegistryOp::Delete(d) => {
                 let key = d.key().map(|n| n.to_string()).unwrap_or_default();
                 let vname = d.value_name().map(|n| n.to_string()).unwrap_or_default();
                 println!("  DELETE {}\\{} \"{}\"", d.root_name(), key, vname);
             }
-            nsis::RegistryOp::Read(r) => {
+            RegistryOp::Read(r) => {
                 let key = r.key().map(|n| n.to_string()).unwrap_or_default();
                 let vname = r.value_name().map(|n| n.to_string()).unwrap_or_default();
                 println!("  READ {}\\{} \"{}\"", r.root_name(), key, vname);
@@ -305,7 +312,7 @@ fn main() {
     }
 }
 
-fn extract_files(installer: &nsis::NsisInstaller<'_>, outdir: &str) {
+fn extract_files(installer: &NsisInstaller<'_>, outdir: &str) {
     let base = Path::new(outdir);
     fs::create_dir_all(base).unwrap_or_else(|e| {
         eprintln!("error creating output directory: {e}");
@@ -385,7 +392,7 @@ fn extract_files(installer: &nsis::NsisInstaller<'_>, outdir: &str) {
 }
 
 /// Resolve a string table offset, returning an empty string on error.
-fn resolve_str(installer: &nsis::NsisInstaller<'_>, offset: i32) -> String {
+fn resolve_str(installer: &NsisInstaller<'_>, offset: i32) -> String {
     if offset <= 0 {
         return String::new();
     }

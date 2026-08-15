@@ -18,7 +18,7 @@ pub mod lzma;
 
 use core::fmt;
 
-use crate::error::Error;
+use crate::{error::Error, util::read_u32_le};
 
 /// Identifies the compression algorithm used by an NSIS installer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +81,7 @@ pub fn read_length_prefix(data: &[u8]) -> Result<(bool, u32), Error> {
             context: "length prefix",
         });
     }
-    let raw = crate::util::read_u32_le(data, 0);
+    let raw = read_u32_le(data, 0);
     let is_compressed = raw & 0x8000_0000 != 0;
     let size = raw & 0x7FFF_FFFF;
     Ok((is_compressed, size))
@@ -363,7 +363,7 @@ fn strip_solid_prefix(data: Vec<u8>) -> Result<Vec<u8>, Error> {
             context: "solid stream length prefix",
         });
     }
-    let prefix = crate::util::read_u32_le(&data, 0) as usize;
+    let prefix = read_u32_le(&data, 0) as usize;
     if prefix == data.len().saturating_sub(4) {
         // Prefix matches exactly — strip it.
         Ok(data.get(4..).unwrap_or(&[]).to_vec())

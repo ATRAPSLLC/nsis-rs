@@ -4,6 +4,8 @@
 
 use std::io::Read;
 
+use flate2::{Decompress, FlushDecompress, Status, read::DeflateDecoder};
+
 use crate::{
     decompress::{DecodeLimit, Decoded},
     error::Error,
@@ -41,14 +43,14 @@ pub fn decompress_deflate(compressed: &[u8], limit: DecodeLimit) -> Result<Decod
 
 /// Bounded decode: fill an `n`-byte buffer and stop, ignoring trailing input.
 fn decompress_bounded(compressed: &[u8], limit: usize) -> Result<Decoded, Error> {
-    let mut decompressor = flate2::Decompress::new(false); // raw deflate, no zlib header
+    let mut decompressor = Decompress::new(false); // raw deflate, no zlib header
     let mut output = vec![0u8; limit];
 
     // `BufError` here means the output buffer filled before the input was
     // consumed — expected when more (unwanted) data follows the bounded
     // region, so we keep what we decoded.
     let status = decompressor
-        .decompress(compressed, &mut output, flate2::FlushDecompress::Finish)
+        .decompress(compressed, &mut output, FlushDecompress::Finish)
         .map_err(|e| Error::DecompressionFailed {
             method: "deflate",
             detail: e.to_string(),
@@ -56,11 +58,11 @@ fn decompress_bounded(compressed: &[u8], limit: usize) -> Result<Decoded, Error>
 
     let bytes_written = decompressor.total_out() as usize;
     match status {
-        flate2::Status::Ok | flate2::Status::StreamEnd | flate2::Status::BufError => {
+        Status::Ok | Status::StreamEnd | Status::BufError => {
             output.truncate(bytes_written);
             // `BufError` means the output buffer filled before the input was
             // consumed — the stream had more to give than `limit` allowed.
-            let truncated = status == flate2::Status::BufError;
+            let truncated = status == Status::BufError;
             Ok(Decoded {
                 data: output,
                 truncated,
@@ -76,7 +78,7 @@ fn decompress_streaming(
     max_output: usize,
     truncate: bool,
 ) -> Result<Decoded, Error> {
-    let mut decoder = flate2::read::DeflateDecoder::new(compressed);
+    let mut decoder = DeflateDecoder::new(compressed);
     let mut output = Vec::new();
     let mut chunk = [0u8; STREAM_CHUNK];
 
@@ -111,17 +113,17 @@ fn decompress_streaming(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::Compress;
+    use flate2::{Compress, Compression, FlushCompress};
 
     #[test]
     fn roundtrip_deflate() {
         let original = b"Hello, NSIS installer world! This is test data for deflate.";
         let mut compressed = vec![0u8; original.len() + 64];
-        let mut compressor = Compress::new(flate2::Compression::default(), false);
+        let mut compressor = Compress::new(Compression::default(), false);
         let status = compressor
-            .compress(original, &mut compressed, flate2::FlushCompress::Finish)
+            .compress(original, &mut compressed, FlushCompress::Finish)
             .unwrap();
-        assert_eq!(status, flate2::Status::StreamEnd);
+        assert_eq!(status, Status::StreamEnd);
         let compressed_len = compressor.total_out() as usize;
         compressed.truncate(compressed_len);
 
@@ -146,11 +148,11 @@ mod tests {
     fn deflate_zeros(len: usize) -> Vec<u8> {
         let original = vec![0u8; len];
         let mut compressed = vec![0u8; len + 1024];
-        let mut compressor = Compress::new(flate2::Compression::default(), false);
+        let mut compressor = Compress::new(Compression::default(), false);
         let status = compressor
-            .compress(&original, &mut compressed, flate2::FlushCompress::Finish)
+            .compress(&original, &mut compressed, FlushCompress::Finish)
             .unwrap();
-        assert_eq!(status, flate2::Status::StreamEnd);
+        assert_eq!(status, Status::StreamEnd);
         let compressed_len = compressor.total_out() as usize;
         compressed.truncate(compressed_len);
         compressed
