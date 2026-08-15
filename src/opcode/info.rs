@@ -3,6 +3,8 @@
 //! Each NSIS opcode has static metadata describing its mnemonic, parameter
 //! count, parameter names, description, and semantic category.
 
+use ParamType::{Int, Jump, String, Unused, Variable};
+
 /// The semantic type of an opcode parameter.
 ///
 /// NSIS entry parameters are raw i32 values. Their interpretation depends
@@ -22,6 +24,143 @@ pub enum ParamType {
     Int,
 }
 
+/// The operand layout of one instruction.
+///
+/// Most opcodes have a fixed layout, the one held in [`OpcodeInfo`]. A few
+/// pack several script commands into a single opcode and pick between them
+/// with an operand: `SectionGetText` and `SectionSetText` are both
+/// [`EW_SECTIONSET`](crate::opcode::EW_SECTIONSET), and they disagree about
+/// which slots hold string offsets. [`param_layout`] resolves that.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamLayout {
+    /// Name for each parameter slot; empty where the form has no operand.
+    pub names: [&'static str; 6],
+    /// Semantic type of each parameter slot.
+    pub types: [ParamType; 6],
+    /// Number of slots to consider, from the start.
+    pub count: u8,
+}
+
+impl ParamLayout {
+    /// The fixed layout an opcode declares.
+    fn fixed(info: &OpcodeInfo) -> Self {
+        Self {
+            names: info.param_names,
+            types: info.param_types,
+            count: info.param_count,
+        }
+    }
+}
+
+/// Property names for the operations [`EW_SECTIONSET`](crate::opcode::EW_SECTIONSET)
+/// reads and writes, in the order NSIS numbers them.
+const SECTION_PROPERTIES: [&str; 6] = [
+    "text",
+    "inst_types",
+    "flags",
+    "code",
+    "code_size",
+    "size_kb",
+];
+
+/// Returns the operand layout for one instruction.
+///
+/// `which` must already be normalized (see
+/// [`NsisInstaller::resolve_opcode`](crate::NsisInstaller::resolve_opcode)),
+/// and `values` are the entry's six raw operands.
+///
+/// Rendering a form-selecting opcode from its fixed layout does not merely
+/// mislabel operands, it loses them: `SectionSetText` keeps its text in the
+/// fifth slot, which the fixed layout marks unused, and `LogSet` keeps an
+/// on/off flag where `LogText` keeps a string offset — read as a string, that
+/// flag resolves to whatever text happens to sit at offset 1. The forms and
+/// slot assignments below follow 7-Zip's `NsisIn.cpp`.
+pub fn param_layout(which: u32, info: &OpcodeInfo, values: &[i32; 6]) -> ParamLayout {
+    let mut layout = ParamLayout::fixed(info);
+    match which as i32 {
+        crate::opcode::EW_LOG => {
+            // LogSet toggles logging; only LogText carries a string.
+            if values[0] != 0 {
+                layout.names[1] = "on_off";
+                layout.types[1] = Int;
+            }
+        }
+        crate::opcode::EW_SECTIONSET => {
+            // The operation doubles as the direction: negative sets, and the
+            // property it names decides which slot the value lives in.
+            // Widened, because -1 is the first set operation and i32::MIN has
+            // no positive counterpart to negate towards.
+            let op = i64::from(values[2]);
+            let (property, sets) = if op >= 0 {
+                (op, false)
+            } else {
+                (op.saturating_add(1).saturating_neg(), true)
+            };
+            let name = usize::try_from(property)
+                .ok()
+                .and_then(|i| SECTION_PROPERTIES.get(i))
+                .copied()
+                .unwrap_or("value");
+
+            layout.names = ["section", "", "op", "", "", ""];
+            layout.types = [String, Unused, Int, Unused, Unused, Unused];
+            layout.count = 3;
+            match (sets, property) {
+                // SectionSetText stores its text in the fifth slot; every other
+                // set operation stores its value in the second.
+                (true, 0) => {
+                    layout.names[4] = name;
+                    layout.types[4] = String;
+                    layout.names[3] = "flags_changed";
+                    layout.types[3] = Int;
+                    layout.count = 5;
+                }
+                (true, _) => {
+                    layout.names[1] = name;
+                    layout.types[1] = String;
+                    layout.names[3] = "flags_changed";
+                    layout.types[3] = Int;
+                    layout.count = 4;
+                }
+                (false, _) => {
+                    layout.names[1] = name;
+                    layout.types[1] = Variable;
+                }
+            }
+        }
+        crate::opcode::EW_INSTTYPESET => {
+            // Two independent flags select between four script commands.
+            let current = values[3] != 0;
+            let writes = values[2] != 0;
+            layout.names = ["inst_type", "", "op", "cur", "", ""];
+            layout.types = [String, Unused, Int, Int, Unused, Unused];
+            layout.count = 4;
+            match (current, writes) {
+                // InstTypeGetText / InstTypeSetText
+                (false, false) => {
+                    layout.names[1] = "text";
+                    layout.types[1] = Variable;
+                }
+                (false, true) => {
+                    layout.names[1] = "text";
+                    layout.types[1] = String;
+                }
+                // GetCurInstType reads into a variable and takes no index.
+                (true, false) => {
+                    layout.names[0] = "";
+                    layout.types[0] = Unused;
+                    layout.names[1] = "output";
+                    layout.types[1] = Variable;
+                }
+                // SetCurInstType
+                (true, true) => {}
+            }
+        }
+        _ => {}
+    }
+    layout
+}
+
 /// Static metadata for a single NSIS opcode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpcodeInfo {
@@ -38,8 +177,6 @@ pub struct OpcodeInfo {
     /// Semantic category (e.g., `"file"`, `"registry"`, `"string"`, `"flow"`).
     pub category: &'static str,
 }
-
-use ParamType::{Int, Jump, String, Unused, Variable};
 
 /// The opcode table.
 ///
@@ -651,6 +788,127 @@ pub static OPCODES: [OpcodeInfo; 72] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::opcode::{EW_INSTTYPESET, EW_LOG, EW_SECTIONSET, lookup};
+
+    /// Resolves the layout for an instruction with the given operands.
+    fn layout_of(which: i32, values: [i32; 6]) -> ParamLayout {
+        let info = lookup(which as u32).expect("opcode should be known");
+        param_layout(which as u32, info, &values)
+    }
+
+    /// The name and type each operand slot renders under, up to `count`.
+    fn slots(layout: &ParamLayout) -> Vec<(&'static str, ParamType)> {
+        layout
+            .names
+            .iter()
+            .zip(layout.types.iter())
+            .take(layout.count as usize)
+            .map(|(&n, &t)| (n, t))
+            .collect()
+    }
+
+    #[test]
+    fn log_set_does_not_read_its_flag_as_a_string() {
+        // LogText carries a string; LogSet carries on/off in the same slot.
+        // Reading that flag as a string offset resolves it to whatever text
+        // sits at offset 1, which is how `LogSet on` rendered as
+        // `text="ProgramFilesDir"`.
+        let text = layout_of(EW_LOG, [0, 42, 0, 0, 0, 0]);
+        assert_eq!(
+            slots(&text),
+            [("type", ParamType::Int), ("text", ParamType::String)]
+        );
+
+        let set = layout_of(EW_LOG, [1, 1, 0, 0, 0, 0]);
+        assert_eq!(
+            slots(&set),
+            [("type", ParamType::Int), ("on_off", ParamType::Int)]
+        );
+    }
+
+    #[test]
+    fn section_get_reads_into_a_variable() {
+        // Operation >= 0 reads; the second slot is the destination variable.
+        let get = layout_of(EW_SECTIONSET, [10, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            slots(&get),
+            [
+                ("section", ParamType::String),
+                ("text", ParamType::Variable),
+                ("op", ParamType::Int),
+            ]
+        );
+
+        // The operation names the property being read.
+        let flags = layout_of(EW_SECTIONSET, [10, 0, 2, 0, 0, 0]);
+        assert_eq!(slots(&flags)[1], ("flags", ParamType::Variable));
+    }
+
+    #[test]
+    fn section_set_text_keeps_its_text_in_the_fifth_slot() {
+        // SectionSetText is the one set operation that does not use slot 1,
+        // so a fixed layout renders it without the text it is setting.
+        let set_text = layout_of(EW_SECTIONSET, [10, 0, -1, 0, 42, 0]);
+        assert_eq!(
+            slots(&set_text),
+            [
+                ("section", ParamType::String),
+                ("", ParamType::Unused),
+                ("op", ParamType::Int),
+                ("flags_changed", ParamType::Int),
+                ("text", ParamType::String),
+            ]
+        );
+
+        // Every other set operation puts its value in slot 1.
+        let set_flags = layout_of(EW_SECTIONSET, [10, 42, -3, 1, 0, 0]);
+        assert_eq!(slots(&set_flags)[1], ("flags", ParamType::String));
+    }
+
+    #[test]
+    fn section_op_out_of_range_still_renders() {
+        // A property number this crate has no name for must not be dropped or
+        // panic the renderer; NSIS gained operations over time.
+        let unknown = layout_of(EW_SECTIONSET, [10, 42, -99, 0, 0, 0]);
+        assert_eq!(slots(&unknown)[1], ("value", ParamType::String));
+
+        // i32::MIN has no positive counterpart, so negating it would overflow.
+        // It names no property, so it renders as a plain set.
+        let extreme = layout_of(EW_SECTIONSET, [10, 42, i32::MIN, 0, 0, 0]);
+        assert_eq!(slots(&extreme)[1], ("value", ParamType::String));
+    }
+
+    #[test]
+    fn inst_type_set_selects_between_four_commands() {
+        let cases = [
+            // (cur, writes) -> the slot-1 rendering of each command
+            ([0, 7, 0, 0, 0, 0], ("text", ParamType::Variable)), // InstTypeGetText
+            ([0, 7, 1, 0, 0, 0], ("text", ParamType::String)),   // InstTypeSetText
+            ([0, 7, 0, 1, 0, 0], ("output", ParamType::Variable)), // GetCurInstType
+            ([0, 0, 1, 1, 0, 0], ("", ParamType::Unused)),       // SetCurInstType
+        ];
+        for (values, expected) in cases {
+            let layout = layout_of(EW_INSTTYPESET, values);
+            assert_eq!(slots(&layout)[1], expected, "operands {values:?}");
+        }
+
+        // GetCurInstType takes no install-type index, so slot 0 is not a string.
+        let get_cur = layout_of(EW_INSTTYPESET, [0, 7, 0, 1, 0, 0]);
+        assert_eq!(slots(&get_cur)[0], ("", ParamType::Unused));
+    }
+
+    #[test]
+    fn opcodes_without_forms_keep_their_fixed_layout() {
+        for (i, info) in OPCODES.iter().enumerate() {
+            if matches!(i as i32, EW_LOG | EW_SECTIONSET | EW_INSTTYPESET) {
+                continue;
+            }
+            let layout = param_layout(i as u32, info, &[1; 6]);
+            assert_eq!(layout.names, info.param_names, "{}", info.mnemonic);
+            assert_eq!(layout.types, info.param_types, "{}", info.mnemonic);
+            assert_eq!(layout.count, info.param_count, "{}", info.mnemonic);
+        }
+    }
 
     #[test]
     fn all_opcodes_have_mnemonics() {
