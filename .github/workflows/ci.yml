@@ -23,6 +23,22 @@ jobs:
           toolchain: ${{ matrix.rust }}
       - run: cargo test
 
+  lockfile:
+    name: Lockfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # The committed lockfile has to be the one a standalone checkout
+      # resolves. A lockfile carrying entries that only exist in a
+      # contributor's surrounding workspace — [[patch.unused]] stanzas naming
+      # sibling crates — is rewritten on checkout, and `cargo publish` refuses
+      # to run against the dirty tree that leaves. Catch that here rather than
+      # at release time.
+      - run: cargo metadata --format-version 1 > /dev/null
+      - name: Lockfile is unchanged by a clean resolve
+        run: git diff --exit-code Cargo.lock
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

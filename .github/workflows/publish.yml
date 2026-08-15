@@ -37,6 +37,9 @@ jobs:
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
-      - run: cargo publish
+      # --locked publishes exactly the committed lockfile. Without it, cargo
+      # silently resolves a new one, and a lockfile that changes on checkout
+      # leaves the working tree dirty, which cargo publish then refuses.
+      - run: cargo publish --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
