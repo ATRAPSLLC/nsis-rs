@@ -14,7 +14,11 @@
 use nsis::{
     Error, Instruction, NsisInstaller, SolidStatus,
     header::firstheader::FirstHeader,
-    opcode::NsisVersion,
+    opcode::{
+        EW_CALL, EW_FGETWS, EW_FINDPROC, EW_FPUTWS, EW_GETOSINFO, EW_INSTTYPESET,
+        EW_INVALID_OPCODE, EW_LOCKWINDOW, EW_LOG, EW_RET, EW_SECTIONSET, EW_WRITEUNINSTALLER,
+        NsisVersion,
+    },
     strings::{ShellTarget, StringEncoding, StringSegment},
 };
 
@@ -501,8 +505,6 @@ fn entries_render_into_a_reused_buffer() {
 
 #[test]
 fn opcode_constants_live_in_the_opcode_module() {
-    use nsis::opcode::{EW_CALL, EW_FGETWS, EW_INVALID_OPCODE, EW_RET};
-
     // The constants sit beside the tables that give them meaning, rather than
     // flooding the crate root with 70 names.
     assert_eq!(
@@ -513,11 +515,6 @@ fn opcode_constants_live_in_the_opcode_module() {
 
 #[test]
 fn opcode_numbering_matches_the_layout_installers_store() {
-    use nsis::opcode::{
-        EW_FGETWS, EW_FINDPROC, EW_FPUTWS, EW_GETOSINFO, EW_INSTTYPESET, EW_LOCKWINDOW, EW_LOG,
-        EW_SECTIONSET, EW_WRITEUNINSTALLER,
-    };
-
     // A standard makensis compiles the log instructions out, so nothing sits
     // between WriteUninstaller and SectionSet. Numbering them as if the log
     // opcode were always present shifts every later instruction by one, which
@@ -1215,4 +1212,228 @@ fn all_compression_methods_produce_same_content() {
         }
     }
     assert!(reference.is_some(), "no payload.txt found in any fixture");
+}
+
+/// Renders every entry of a fixture as `MNEMONIC operands`.
+fn rendered_entries(name: &str) -> (NsisInstaller<'static>, Vec<String>) {
+    let installer = parse_fixture(name);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for entry in installer.entries() {
+        line.clear();
+        installer.write_entry(&mut line, &entry.expect("entry should decode"));
+        lines.push(line.clone());
+    }
+    (installer, lines)
+}
+
+/// Drops the `date_lo`/`date_hi` operands, which record when the fixture was
+/// compiled and so differ between two builds of the same script.
+fn without_timestamps(line: &str) -> String {
+    line.split(", ")
+        .filter(|p| !p.starts_with("date_lo=") && !p.starts_with("date_hi="))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[test]
+fn instructions_above_the_opcode_boundary_decode() {
+    // Regression test for the table being shifted from opcode 63 up: every
+    // instruction here used to be read as its neighbour, so `SectionSetText`
+    // rendered as `Log` and `FileWriteUTF16LE` as `LockWindow`.
+    let (installer, lines) = rendered_entries("opcodes_high.exe");
+    assert!(
+        !installer.is_log_build(),
+        "stock 3.10 build is not a log build"
+    );
+
+    // Each of these is one line of opcodes_high.nsi, decoded. Anything less
+    // than the whole operand list would not have caught the two defects this
+    // fixture exposed: SectionSetText keeps its text in the fifth operand
+    // slot, which the fixed layout marks unused, so the text was dropped.
+    for (opcode, expected) in [
+        (63, r#"EW_SECTIONSET section="0", text=$0"#),
+        (
+            63,
+            r#"EW_SECTIONSET section="0", op=-1, text="Renamed Section""#,
+        ),
+        (64, r#"EW_INSTTYPESET inst_type="0", text="Typical", op=1"#),
+        (65, "EW_GETOSINFO operation=0, varies=3"),
+        (67, "EW_LOCKWINDOW on_off=0"),
+        (68, r#"EW_FPUTWS handle=$1, string="wide text""#),
+        (69, "EW_FGETWS handle=$1, output=$2, maxlen=\"1023\""),
+    ] {
+        assert!(
+            lines.iter().any(|l| l == expected),
+            "opcode {opcode} should decode to `{expected}`, got:\n{}",
+            lines.join("\n")
+        );
+    }
+}
+
+#[test]
+fn a_log_build_is_detected_and_decodes_the_same_script() {
+    // opcodes_logbuild is the same script as opcodes_high compiled by a
+    // logging-enabled makensis, which inserts Log at 63 and shifts everything
+    // above it up by one. 7-Zip agrees, reporting `NSIS-3 Unicode log`.
+    let (installer, log_lines) = rendered_entries("opcodes_logbuild.exe");
+    assert!(installer.is_log_build(), "logging build should be detected");
+
+    let logging: Vec<_> = log_lines
+        .iter()
+        .filter(|l| l.starts_with("EW_LOG"))
+        .collect();
+    assert_eq!(
+        logging.len(),
+        2,
+        "expected LogSet and LogText: {log_lines:#?}"
+    );
+
+    // Dropping the two logging instructions, which only a logging build can
+    // emit, must leave exactly the stock build's instruction stream. Reading
+    // either file under the other's layout would break this.
+    let (_, stock_lines) = rendered_entries("opcodes_high.exe");
+    let shared: Vec<_> = log_lines
+        .iter()
+        .filter(|l| !l.starts_with("EW_LOG"))
+        .map(|l| without_timestamps(l))
+        .collect();
+    let stock: Vec<_> = stock_lines.iter().map(|l| without_timestamps(l)).collect();
+    assert_eq!(shared, stock);
+}
+
+#[test]
+fn nsis1x_is_read_through_its_own_layout() {
+    // NSIS 1.x has no block table, no page or language blocks, 20-byte
+    // sections and 24-byte instructions. Read as 2.x, the header's string
+    // pointers land on the block descriptors and the file does not parse at
+    // all — which is what it used to do.
+    let inst = parse_fixture("nsis1x.exe");
+    assert_eq!(inst.version(), NsisVersion::V1);
+    assert_eq!(inst.string_encoding(), StringEncoding::Ansi);
+    assert_eq!(inst.section_count(), 1, "the build log reports 1 section");
+    assert_eq!(
+        inst.entry_count(),
+        3,
+        "the build log reports 3 instructions"
+    );
+    assert_eq!(inst.pages().count(), 0, "1.x has no page block");
+
+    // Bit 0 of the first-header flags means "CRC present" in 1.x, where 2.x
+    // spends it on "uninstaller". nsis1x.nsi writes no uninstaller.
+    assert!(!inst.is_uninstaller());
+
+    let section = inst.sections().next().unwrap().unwrap();
+    assert_eq!(
+        inst.read_string(section.name_ptr()).unwrap().to_string(),
+        "Main"
+    );
+    assert_eq!(
+        section.code_size(),
+        2,
+        "SetOutPath and File, before the Ret"
+    );
+}
+
+#[test]
+fn nsis1x_instructions_use_the_1x_opcode_table() {
+    // 1.x numbers its instructions differently: CreateDirectory is 14 where
+    // 2.x puts it at 11, and File is 21 where 2.x puts it at 20. Read through
+    // the modern table these would be SetFileAttributes and GetTempFileName.
+    let (_, lines) = rendered_entries("nsis1x.exe");
+    let decoded: Vec<_> = lines.iter().map(|l| without_timestamps(l)).collect();
+    assert_eq!(
+        decoded,
+        [
+            r#"EW_CREATEDIR path="$INSTDIR", update_instdir=1"#,
+            r#"EW_EXTRACTFILE overwrite=0, name="payload.txt""#,
+            "EW_RET",
+        ]
+    );
+}
+
+#[test]
+fn nsis1x_variables_are_one_byte_each() {
+    // A 1.x variable reference is a single byte at or above 0xDD, where every
+    // later version writes a code byte plus an encoded index. The install
+    // directory of nsis1x.nsi is `$PROGRAMFILES\Nsis1xTest`, stored as the one
+    // byte 0xF6 followed by literal text.
+    let inst = parse_fixture("nsis1x.exe");
+    let dir = inst.install_dir().expect("an install directory");
+    assert_eq!(dir.to_string(), "$PROGRAMFILES\\Nsis1xTest");
+    assert!(matches!(
+        dir.segments.first(),
+        Some(StringSegment::Variable { index: 25, name }) if name == "$PROGRAMFILES"
+    ));
+
+    // $INSTDIR is index 22 in the 1.x list and 21 in every later one, so the
+    // output directory has to be resolved through the installer's own layout.
+    let file = inst.files().next().unwrap().unwrap();
+    assert_eq!(
+        file.dest_path().unwrap().to_string(),
+        "$INSTDIR\\payload.txt"
+    );
+}
+
+/// Rewrites an NSIS 2.x bzip2 stream into the layout NSIS 1.x wrote.
+///
+/// The two differ by one bit: 1.x kept standard bzip2's `randomised` flag
+/// between a block's header byte and its origPtr. Inserting a zero bit there
+/// turns one into the other, which is only this simple for a single-block
+/// stream — every fixture header is far under bzip2's 900 KB block size.
+fn to_nsis1_bzip2_layout(stream: &[u8]) -> Vec<u8> {
+    let (header, rest) = stream.split_at(1);
+    assert_eq!(header[0], 0x31, "expected a bzip2 block header byte");
+
+    let mut out = vec![header[0]];
+    let mut carry = 0u8;
+    for &byte in rest {
+        // Shift everything down one bit, feeding in a zero: the randomised
+        // flag NSIS 2.x stopped writing.
+        out.push(carry | (byte >> 1));
+        carry = (byte & 1) << 7;
+    }
+    out.push(carry);
+    out
+}
+
+/// Returns the compressed header block of a fixture, without its length prefix.
+fn compressed_header_block(name: &str) -> &'static [u8] {
+    let data = fixture_bytes(name);
+    let signature = b"\xEF\xBE\xAD\xDENullsoftInst";
+    let at = data
+        .windows(signature.len())
+        .position(|w| w == signature)
+        .expect("an NSIS signature");
+    // The FirstHeader starts one field before the signature, and the block's
+    // 4-byte length prefix follows it.
+    &data[at - 4 + FirstHeader::SIZE + 4..]
+}
+
+#[test]
+fn nsis1x_bzip2_keeps_the_randomised_flag_2x_dropped() {
+    // No NSIS 1.x bzip2 installer is small enough to commit, so the layout is
+    // checked against a real 2.x stream rewritten into it. Reading this under
+    // the 2.x layout misaligns everything from origPtr on, which is how NSIS's
+    // own 1.98 distribution — a solid bzip2 1.x installer — used to fail.
+    let stream = compressed_header_block("bzip2_nonsolid.exe");
+    let expected = nsis::decompress::decompress_block(
+        stream,
+        nsis::decompress::CompressionMethod::Bzip2,
+        nsis::decompress::DecodeLimit::Truncate(1 << 20),
+    )
+    .expect("the 2.x stream decodes")
+    .data;
+    assert!(!expected.is_empty());
+
+    let as_v1 = to_nsis1_bzip2_layout(stream);
+    let decoded = nsis::decompress::decompress_block(
+        &as_v1,
+        nsis::decompress::CompressionMethod::Bzip2,
+        nsis::decompress::DecodeLimit::Truncate(1 << 20),
+    )
+    .expect("the 1.x layout decodes too")
+    .data;
+
+    assert_eq!(decoded, expected);
 }
