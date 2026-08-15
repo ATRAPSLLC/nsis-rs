@@ -34,24 +34,6 @@ pub use firstheader::FirstHeader;
 
 use crate::error::Error;
 
-/// Hint about which NSIS version produced an installer.
-///
-/// This is determined heuristically from header structure sizes,
-/// string encoding, and opcode ranges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NsisVersionHint {
-    /// NSIS 1.x (legacy `"nsisinstall"` signature).
-    Nsis1x,
-    /// NSIS 2.x (ANSI strings, ~67 opcodes).
-    Nsis2x,
-    /// NSIS 3.x (Unicode strings, ~71 opcodes).
-    Nsis3x,
-    /// Jim Park's Unicode fork (hybrid encoding).
-    Park,
-    /// Version could not be determined.
-    Unknown,
-}
-
 /// Scans the overlay for a valid NSIS FirstHeader.
 ///
 /// Returns the byte offset within the overlay and the parsed [`FirstHeader`].

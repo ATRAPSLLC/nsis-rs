@@ -5,7 +5,7 @@ use crate::{
     decompress::{self, CompressionMethod, CompressionMode, DecodeLimit},
     error::Error,
     header::{
-        self, NsisVersionHint,
+        self,
         blockheader::BlockType,
         commonheader::CommonHeader,
         firstheader::{FH_FLAGS_UNINSTALL, FirstHeader},
@@ -244,7 +244,7 @@ impl<'a> NsisInstaller<'a> {
         // Step 4: Parse the common header and extract all values before
         // moving header_data into the struct (CommonHeader borrows header_data).
         let (blocks, common_flags, langtable_size, callbacks) = {
-            let common_header = CommonHeader::parse(&header_data, NsisVersionHint::Unknown)?;
+            let common_header = CommonHeader::parse(&header_data)?;
             let mut blocks = [(0u32, 0i32); 8];
             for (block, bh) in blocks.iter_mut().zip(common_header.blocks().iter()) {
                 *block = (bh.offset(), bh.num());
