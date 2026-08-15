@@ -7,6 +7,8 @@
 use core::fmt;
 use std::error;
 
+use goblin::error::Error as GoblinError;
+
 /// All errors that can occur during NSIS installer parsing.
 ///
 /// Each variant carries enough context for a useful diagnostic message.
@@ -184,9 +186,9 @@ impl fmt::Display for Error {
 
 impl error::Error for Error {}
 
-impl From<goblin::error::Error> for Error {
+impl From<GoblinError> for Error {
     /// Converts a goblin parsing error into our [`Error::Goblin`] variant.
-    fn from(e: goblin::error::Error) -> Self {
+    fn from(e: GoblinError) -> Self {
         Error::Goblin(e.to_string())
     }
 }
@@ -320,7 +322,7 @@ mod tests {
 
     #[test]
     fn error_trait_impl() {
-        let e: Box<dyn std::error::Error> = Box::new(Error::OverlayNotFound);
+        let e: Box<dyn error::Error> = Box::new(Error::OverlayNotFound);
         let _ = e.to_string();
     }
 

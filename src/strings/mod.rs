@@ -15,6 +15,9 @@ pub mod park;
 pub mod unicode;
 
 use core::fmt;
+use std::borrow::Cow;
+
+use crate::error::Error;
 
 /// Identifies the string encoding used by an NSIS installer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,9 +253,9 @@ pub fn read_nsis_string(
     table: &[u8],
     offset: usize,
     encoding: StringEncoding,
-) -> Result<NsisString, crate::error::Error> {
+) -> Result<NsisString, Error> {
     if offset >= table.len() {
-        return Err(crate::error::Error::InvalidStringOffset {
+        return Err(Error::InvalidStringOffset {
             offset: offset as u32,
         });
     }
@@ -312,11 +315,11 @@ static VARIABLE_NAMES: [&str; 32] = [
 /// `String` only for user-defined variables (32+), displayed as `$_N_`.
 ///
 /// Source: 7-Zip `NsisIn.cpp` `GetVar2`, `state.h`.
-pub fn variable_name(index: u16) -> std::borrow::Cow<'static, str> {
+pub fn variable_name(index: u16) -> Cow<'static, str> {
     if let Some(name) = VARIABLE_NAMES.get(index as usize) {
-        std::borrow::Cow::Borrowed(name)
+        Cow::Borrowed(name)
     } else {
-        std::borrow::Cow::Owned(format!("$_{}_", index.saturating_sub(NUM_INTERNAL_VARS)))
+        Cow::Owned(format!("$_{}_", index.saturating_sub(NUM_INTERNAL_VARS)))
     }
 }
 

@@ -3,7 +3,9 @@
 //! NSIS LZMA streams begin with a properties byte (typically `0x5D` for
 //! lc=3, lp=0, pb=2) followed by a 4-byte little-endian dictionary size.
 
-use std::io::{self, Write};
+use std::io::{self, Cursor, Write};
+
+use lzma_rust2::LzmaReader;
 
 use crate::{
     decompress::{DecodeLimit, Decoded},
@@ -108,12 +110,13 @@ pub fn decompress_lzma(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded,
     // the marker (CRC, padding) are left unread, so unlike lzma-rs there is
     // no "more bytes are available" error to tolerate.
     let mut reader =
-        lzma_rust2::LzmaReader::new_mem_limit(std::io::Cursor::new(&lzma_header), u32::MAX, None)
-            .map_err(|e| Error::DecompressionFailed {
-            method: "lzma",
-            detail: e.to_string(),
+        LzmaReader::new_mem_limit(Cursor::new(&lzma_header), u32::MAX, None).map_err(|e| {
+            Error::DecompressionFailed {
+                method: "lzma",
+                detail: e.to_string(),
+            }
         })?;
-    match std::io::copy(&mut reader, &mut writer) {
+    match io::copy(&mut reader, &mut writer) {
         Ok(_) => {}
         Err(e) => {
             if writer.overflowed {
