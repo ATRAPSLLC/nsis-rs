@@ -22,8 +22,8 @@ use crate::{
         page::PageIter,
         section::{Section, SectionIter},
     },
-    opcode::{self, NsisVersion, OpcodeInfo, ParkSubVersion, info::ParamType},
-    strings::{self, NsisString, StringEncoding},
+    opcode::{self, Nsis2SubVersion, NsisVersion, OpcodeInfo, ParkSubVersion, info::ParamType},
+    strings::{self, NsisString, StringEncoding, StringSegment},
 };
 
 /// The outcome of decompressing an installer's solid file-data stream.
@@ -124,6 +124,8 @@ pub struct NsisInstaller<'a> {
     callbacks: [i32; 10],
     /// Park sub-version (only meaningful when `version == Park`).
     park_sub: Option<ParkSubVersion>,
+    /// NSIS 2 variable layout (only meaningful when `version == V2`).
+    nsis2_sub: Option<Nsis2SubVersion>,
     /// Maximum decompressed size budget for unknown-size streams.
     ///
     /// Applied per decompression call to embedded files, the solid file-data
@@ -289,20 +291,48 @@ impl<'a> NsisInstaller<'a> {
             .copied()
             .unwrap_or((0, 0))
             .0 as usize;
-        let encoding = match header_data.get(string_block_offset..) {
-            Some(slice) if !slice.is_empty() => strings::detect_encoding(slice),
-            _ => StringEncoding::Ansi,
+        let string_table = header_data.get(string_block_offset..).unwrap_or(&[]);
+        let encoding = if string_table.is_empty() {
+            StringEncoding::Ansi
+        } else {
+            strings::detect_encoding(string_table)
         };
 
-        let version = NsisVersion::detect(encoding, is_legacy);
+        let version = NsisVersion::detect(encoding, is_legacy, string_table);
 
         // Step 5b: Detect Park sub-version by scanning entries.
+        let ent_count = ent_count_raw.max(0) as usize;
         let park_sub = if version == NsisVersion::Park {
-            let ent_count = ent_count_raw.max(0) as usize;
             Some(opcode::detect_park_sub_version(
                 &header_data,
                 ent_offset,
                 ent_count,
+            ))
+        } else {
+            None
+        };
+
+        // Step 5c: NSIS 2 moved its built-in variables around, so an ANSI
+        // NSIS-2 installer needs its variable layout pinned down before any
+        // variable reference can be decoded correctly.
+        let nsis2_sub = if version == NsisVersion::V2 {
+            Some(opcode::detect_nsis2_sub_version(
+                &header_data,
+                ent_offset,
+                ent_count,
+                |offset| {
+                    let string = strings::read_string_at(
+                        &header_data,
+                        string_block_offset,
+                        encoding,
+                        offset,
+                    )
+                    .ok()?;
+                    match string.segments.as_slice() {
+                        [StringSegment::Variable(index)] => Some(*index),
+                        _ => None,
+                    }
+                },
             ))
         } else {
             None
@@ -392,6 +422,7 @@ impl<'a> NsisInstaller<'a> {
             section_size,
             callbacks,
             park_sub,
+            nsis2_sub,
             max_decompressed_size,
         })
     }
@@ -408,6 +439,17 @@ impl<'a> NsisInstaller<'a> {
     #[inline]
     pub fn version(&self) -> NsisVersion {
         self.version
+    }
+
+    /// Returns the NSIS 2 variable layout, if this is an NSIS 2 installer.
+    ///
+    /// `None` for every other version. NSIS 2 moved its built-in variables
+    /// between releases, so decoding a variable reference — or locating the
+    /// internal `$_OUTDIR` — depends on which layout applies. See
+    /// [`Nsis2SubVersion`].
+    #[inline]
+    pub fn nsis2_sub_version(&self) -> Option<Nsis2SubVersion> {
+        self.nsis2_sub
     }
 
     /// Returns the detected compression method.
@@ -538,22 +580,13 @@ impl<'a> NsisInstaller<'a> {
     /// installers (NSIS 3.x), each TCHAR is 2 bytes, so the byte position
     /// is `offset * 2`. For ANSI installers, each TCHAR is 1 byte.
     pub fn read_string(&self, offset: i32) -> Result<NsisString, Error> {
-        if offset < 0 {
-            return Ok(NsisString {
-                segments: Vec::new(),
-            });
-        }
         let string_block_offset = self.block_info(BlockType::Strings).0 as usize;
-        // name_ptr and other string offsets are TCHAR indices, not byte offsets.
-        // For Unicode (UTF-16LE), multiply by 2 to get the byte offset.
-        // Both Unicode and Park are UTF-16LE (char_size = 2).
-        let char_size = match self.encoding {
-            StringEncoding::Unicode | StringEncoding::Park => 2,
-            StringEncoding::Ansi => 1,
-        };
-        let abs_offset =
-            string_block_offset.saturating_add((offset as usize).saturating_mul(char_size));
-        strings::read_nsis_string(&self.header_data, abs_offset, self.encoding)
+        strings::read_string_at(
+            &self.header_data,
+            string_block_offset,
+            self.encoding,
+            offset,
+        )
     }
 
     /// Returns an iterator over embedded files (`EW_EXTRACTFILE` entries).

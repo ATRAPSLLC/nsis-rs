@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use nsis::{
     NsisInstaller,
     decompress::{CompressionMethod, CompressionMode},
-    opcode::NsisVersion,
+    opcode::{Nsis2SubVersion, NsisVersion},
     strings::StringEncoding,
 };
 
@@ -46,6 +46,13 @@ struct Fixture {
     compiler: &'static str,
     /// NSIS version the parser should detect.
     version: NsisVersion,
+    /// Variable layout the parser should report for an NSIS 2 installer.
+    ///
+    /// Every NSIS 2 fixture here is `From226`, including the 2.03 and 2.25
+    /// builds: the layout is detected from instructions a script has to
+    /// actually use, and these scripts use none of them. 7-Zip reads them the
+    /// same way. See `opcode::detect_nsis2_sub_version`.
+    nsis2_sub: Option<Nsis2SubVersion>,
     encoding: StringEncoding,
     method: CompressionMethod,
     mode: CompressionMode,
@@ -69,6 +76,7 @@ const FIXTURES: &[Fixture] = &[
         name: "deflate_nonsolid",
         compiler: "makensis 3.x",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Deflate,
         mode: CompressionMode::NonSolid,
@@ -82,6 +90,7 @@ const FIXTURES: &[Fixture] = &[
         name: "deflate_solid",
         compiler: "makensis 3.x",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Deflate,
         mode: CompressionMode::Solid,
@@ -95,6 +104,7 @@ const FIXTURES: &[Fixture] = &[
         name: "lzma_nonsolid",
         compiler: "makensis 3.x",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Lzma,
         mode: CompressionMode::NonSolid,
@@ -108,6 +118,7 @@ const FIXTURES: &[Fixture] = &[
         name: "lzma_solid",
         compiler: "makensis 3.x",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Lzma,
         mode: CompressionMode::Solid,
@@ -121,6 +132,7 @@ const FIXTURES: &[Fixture] = &[
         name: "bzip2_nonsolid",
         compiler: "makensis 3.x",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Bzip2,
         mode: CompressionMode::NonSolid,
@@ -134,6 +146,7 @@ const FIXTURES: &[Fixture] = &[
         name: "bzip2_solid",
         compiler: "makensis 3.x",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Bzip2,
         mode: CompressionMode::Solid,
@@ -147,6 +160,7 @@ const FIXTURES: &[Fixture] = &[
         name: "full_featured",
         compiler: "makensis 3.x",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Lzma,
         mode: CompressionMode::Solid,
@@ -160,6 +174,7 @@ const FIXTURES: &[Fixture] = &[
         name: "deflate_single_file",
         compiler: "makensis 3.x",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Deflate,
         mode: CompressionMode::NonSolid,
@@ -173,28 +188,29 @@ const FIXTURES: &[Fixture] = &[
     Fixture {
         name: "ansi3_deflate_nonsolid",
         compiler: "makensis 3.10 (x86-ansi)",
-        // Detection maps ANSI to NSIS 2 unconditionally; this is a 3.10 build.
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Ansi,
         method: CompressionMethod::Deflate,
         mode: CompressionMode::NonSolid,
         files: 2,
         uninstallers: 0,
         budget: DEFAULT_BUDGET,
-        version_defect: Some("ANSI NSIS-3 installers are reported as NSIS 2"),
+        version_defect: None,
         name_defect: None,
     },
     Fixture {
         name: "ansi3_latin1",
         compiler: "makensis 3.10 (x86-ansi)",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Ansi,
         method: CompressionMethod::Deflate,
         mode: CompressionMode::NonSolid,
         files: 2,
         uninstallers: 0,
         budget: DEFAULT_BUDGET,
-        version_defect: Some("ANSI NSIS-3 installers are reported as NSIS 2"),
+        version_defect: None,
         name_defect: Some(
             "the ANSI decoder treats 0xFC-0xFF as NSIS-2 special codes, so the \
              Latin-1 characters in these names are eaten or misread as a shell folder",
@@ -205,6 +221,7 @@ const FIXTURES: &[Fixture] = &[
         name: "nsis203_ansi",
         compiler: "makensis 2.03",
         version: NsisVersion::V2,
+        nsis2_sub: Some(Nsis2SubVersion::From226),
         encoding: StringEncoding::Ansi,
         method: CompressionMethod::Deflate,
         mode: CompressionMode::NonSolid,
@@ -218,6 +235,7 @@ const FIXTURES: &[Fixture] = &[
         name: "nsis225_ansi",
         compiler: "makensis 2.25",
         version: NsisVersion::V2,
+        nsis2_sub: Some(Nsis2SubVersion::From226),
         encoding: StringEncoding::Ansi,
         method: CompressionMethod::Deflate,
         mode: CompressionMode::NonSolid,
@@ -231,6 +249,7 @@ const FIXTURES: &[Fixture] = &[
         name: "nsis246_ansi_solid",
         compiler: "makensis 2.46",
         version: NsisVersion::V2,
+        nsis2_sub: Some(Nsis2SubVersion::From226),
         encoding: StringEncoding::Ansi,
         method: CompressionMethod::Lzma,
         mode: CompressionMode::Solid,
@@ -244,6 +263,7 @@ const FIXTURES: &[Fixture] = &[
         name: "nsis246_ansi_latin1",
         compiler: "makensis 2.46",
         version: NsisVersion::V2,
+        nsis2_sub: Some(Nsis2SubVersion::From226),
         encoding: StringEncoding::Ansi,
         method: CompressionMethod::Deflate,
         mode: CompressionMode::NonSolid,
@@ -260,6 +280,7 @@ const FIXTURES: &[Fixture] = &[
         name: "park1_unicode",
         compiler: "makensis 2.46.1-Unicode",
         version: NsisVersion::Park,
+        nsis2_sub: None,
         encoding: StringEncoding::Park,
         method: CompressionMethod::Lzma,
         mode: CompressionMode::Solid,
@@ -273,6 +294,7 @@ const FIXTURES: &[Fixture] = &[
         name: "park2_unicode",
         compiler: "makensis 2.46.2-Unicode",
         version: NsisVersion::Park,
+        nsis2_sub: None,
         encoding: StringEncoding::Park,
         method: CompressionMethod::Lzma,
         mode: CompressionMode::Solid,
@@ -286,6 +308,7 @@ const FIXTURES: &[Fixture] = &[
         name: "park3_unicode",
         compiler: "makensis 2.46.3-Unicode",
         version: NsisVersion::Park,
+        nsis2_sub: None,
         encoding: StringEncoding::Park,
         method: CompressionMethod::Lzma,
         mode: CompressionMode::Solid,
@@ -300,6 +323,7 @@ const FIXTURES: &[Fixture] = &[
         name: "dirs_unicode_solid",
         compiler: "makensis 3.10 (x86-unicode)",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Lzma,
         mode: CompressionMode::Solid,
@@ -313,6 +337,7 @@ const FIXTURES: &[Fixture] = &[
         name: "dirs_nsis246_ansi_solid",
         compiler: "makensis 2.46",
         version: NsisVersion::V2,
+        nsis2_sub: Some(Nsis2SubVersion::From226),
         encoding: StringEncoding::Ansi,
         method: CompressionMethod::Lzma,
         mode: CompressionMode::Solid,
@@ -327,6 +352,7 @@ const FIXTURES: &[Fixture] = &[
         name: "oversize_lzma_solid",
         compiler: "makensis 3.10 (x86-unicode)",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Lzma,
         mode: CompressionMode::Solid,
@@ -340,6 +366,7 @@ const FIXTURES: &[Fixture] = &[
         name: "oversize_bzip2_solid",
         compiler: "makensis 3.10 (x86-unicode)",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Bzip2,
         mode: CompressionMode::Solid,
@@ -353,6 +380,7 @@ const FIXTURES: &[Fixture] = &[
         name: "oversize_zlib_solid",
         compiler: "makensis 3.10 (x86-unicode)",
         version: NsisVersion::V3,
+        nsis2_sub: None,
         encoding: StringEncoding::Unicode,
         method: CompressionMethod::Deflate,
         mode: CompressionMode::Solid,
@@ -480,6 +508,12 @@ fn declared_metadata_matches() {
             inst.string_encoding(),
             fixture.encoding,
             "{name} ({}): string encoding",
+            fixture.compiler
+        );
+        assert_eq!(
+            inst.nsis2_sub_version(),
+            fixture.nsis2_sub,
+            "{name} ({}): NSIS 2 variable layout",
             fixture.compiler
         );
         assert_eq!(inst.compression(), fixture.method, "{name}: method");

@@ -100,6 +100,39 @@ pub fn detect_encoding(string_table: &[u8]) -> StringEncoding {
     StringEncoding::Unicode
 }
 
+/// Returns `true` if an ANSI string table uses the NSIS 3 special-code range.
+///
+/// ANSI alone does not imply NSIS 2: makensis 3.x compiles an ANSI target
+/// whenever a script omits `Unicode true`, and NSIS 3 moved the special codes
+/// from `0xFC-0xFF` down to `0x01-0x04`. The two ranges cannot be told apart
+/// by looking at a single byte, because `0xFC-0xFF` are also the ordinary
+/// Latin-1 characters `ü ý þ ÿ` and `0x01-0x04` are legitimate control
+/// characters.
+///
+/// The reliable marker is a variable reference at the start of a string: a
+/// null terminator, then the NSIS 3 variable code `0x03`, then the first byte
+/// of the two-byte coded number, which always has its high bit set. NSIS 2
+/// writes `0xFD` there instead.
+///
+/// # Source
+///
+/// 7-Zip `NsisIn.cpp`, `DetectNsisType` (the non-Unicode branch).
+pub fn detect_ansi_nsis3(string_table: &[u8]) -> bool {
+    // A string table always starts with the empty string, so index 0 is a
+    // terminator and the scan can look at every following byte triple.
+    string_table.windows(3).any(|w| {
+        w.first() == Some(&0)
+            && w.get(1) == Some(&NS3_VAR)
+            && w.get(2).is_some_and(|c| c & 0x80 != 0)
+    })
+}
+
+/// NSIS 3 ANSI special code introducing a variable reference.
+///
+/// Mirrors `NS_3_CODE_VAR` in 7-Zip's `NsisIn.cpp`, and the ANSI reader's own
+/// `NS3_VAR`.
+const NS3_VAR: u8 = 0x03;
+
 /// Decodes a 14-bit NSIS coded short from 2 bytes.
 ///
 /// The NSIS encoding stores a 14-bit value across two bytes, each with
@@ -265,6 +298,44 @@ pub fn read_nsis_string(
         StringEncoding::Unicode => unicode::read_unicode_string(table, offset),
         StringEncoding::Park => park::read_park_string(table, offset),
     }
+}
+
+/// Reads a string from a header block's string table by TCHAR offset.
+///
+/// String references inside NSIS structures — section `name_ptr` fields, entry
+/// parameter slots — are TCHAR indices rather than byte offsets, so the offset
+/// is scaled by the encoding's character size before reading. A negative offset
+/// is not a reference at all and yields an empty string.
+///
+/// # Arguments
+///
+/// - `header_data`: the decompressed header block
+/// - `string_block_offset`: byte offset of the string table within it
+/// - `encoding`: the table's encoding
+/// - `offset`: TCHAR index of the string to read
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidStringOffset`] if the offset lies beyond the table.
+pub fn read_string_at(
+    header_data: &[u8],
+    string_block_offset: usize,
+    encoding: StringEncoding,
+    offset: i32,
+) -> Result<NsisString, Error> {
+    if offset < 0 {
+        return Ok(NsisString {
+            segments: Vec::new(),
+        });
+    }
+    // Both Unicode and Park are UTF-16LE, so their TCHAR is 2 bytes.
+    let char_size = match encoding {
+        StringEncoding::Unicode | StringEncoding::Park => 2,
+        StringEncoding::Ansi => 1,
+    };
+    let abs_offset =
+        string_block_offset.saturating_add((offset as usize).saturating_mul(char_size));
+    read_nsis_string(header_data, abs_offset, encoding)
 }
 
 /// Number of built-in (internal) NSIS variables.

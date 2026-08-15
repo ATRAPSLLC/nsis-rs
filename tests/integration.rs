@@ -11,7 +11,10 @@
     clippy::indexing_slicing
 )]
 
-use nsis::{Error, NsisInstaller, SolidStatus, header::firstheader::FirstHeader};
+use nsis::{
+    Error, NsisInstaller, SolidStatus, header::firstheader::FirstHeader, opcode::NsisVersion,
+    strings::StringEncoding,
+};
 
 fn fixture_bytes(name: &str) -> &'static [u8] {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -790,6 +793,54 @@ fn multi_block_bzip2_solid_stream_is_byte_exact() {
         .expect("the 72 MiB payload should decompress");
     assert_eq!(big.len(), 75_497_472);
     assert!(big.iter().all(|&b| b == 0), "payload should be all zeros");
+}
+
+#[test]
+fn ansi_installers_are_not_assumed_to_be_nsis2() {
+    // makensis 3.x compiles an ANSI target whenever a script omits
+    // `Unicode true`, so the encoding alone does not give the version away.
+    // These two are 3.10 builds with an ANSI string table.
+    for name in ["ansi3_deflate_nonsolid.exe", "ansi3_latin1.exe"] {
+        let inst = parse_fixture(name);
+        assert_eq!(inst.string_encoding(), StringEncoding::Ansi, "{name}");
+        assert_eq!(
+            inst.version(),
+            NsisVersion::V3,
+            "{name}: built by makensis 3.10"
+        );
+        assert_eq!(
+            inst.nsis2_sub_version(),
+            None,
+            "{name}: not an NSIS 2 installer"
+        );
+    }
+
+    // Genuine NSIS 2 builds keep reporting NSIS 2.
+    for name in [
+        "nsis203_ansi.exe",
+        "nsis225_ansi.exe",
+        "nsis246_ansi_solid.exe",
+        "nsis246_ansi_latin1.exe",
+        "dirs_nsis246_ansi_solid.exe",
+    ] {
+        let inst = parse_fixture(name);
+        assert_eq!(inst.string_encoding(), StringEncoding::Ansi, "{name}");
+        assert_eq!(inst.version(), NsisVersion::V2, "{name}");
+    }
+}
+
+#[test]
+fn latin1_names_do_not_look_like_nsis2_variable_codes() {
+    // `ansi3_latin1` stores `grüße.txt` and `þýÿ.ini`, whose bytes fall in the
+    // NSIS 2 special-code range 0xFC-0xFF. Version detection keys off the
+    // NSIS 3 code range instead, so those literals cannot drag it back to
+    // NSIS 2 — the trap that a byte-frequency heuristic would fall into.
+    let inst = parse_fixture("ansi3_latin1.exe");
+    assert_eq!(inst.version(), NsisVersion::V3);
+
+    // Its NSIS 2.46 counterpart carries the same text and must stay NSIS 2.
+    let inst = parse_fixture("nsis246_ansi_latin1.exe");
+    assert_eq!(inst.version(), NsisVersion::V2);
 }
 
 #[test]
