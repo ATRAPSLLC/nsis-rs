@@ -23,7 +23,7 @@ use crate::{
         section::{Section, SectionIter},
     },
     opcode::{self, Nsis2SubVersion, NsisVersion, OpcodeInfo, ParkSubVersion, info::ParamType},
-    strings::{self, NsisString, StringEncoding, StringSegment, ansi::AnsiCodeRange},
+    strings::{self, NsisString, StringEncoding, StringSegment, StringTable, ansi::AnsiCodeRange},
 };
 
 /// The outcome of decompressing an installer's solid file-data stream.
@@ -327,15 +327,17 @@ impl<'a> NsisInstaller<'a> {
                 ent_offset,
                 ent_count,
                 |offset| {
-                    let string = strings::read_string_at(
+                    // A provisional table: the variable *count* is not known
+                    // until this detection finishes. That is sound because the
+                    // detection compares variable indices, never their names.
+                    let table = StringTable::new(
                         &header_data,
                         string_block_offset,
                         encoding,
                         ansi_codes,
-                        offset,
-                    )
-                    .ok()?;
-                    match string.segments.as_slice() {
+                        strings::DEFAULT_INTERNAL_VARS,
+                    );
+                    match table.read(offset).ok()?.segments.as_slice() {
                         [StringSegment::Variable(index)] => Some(*index),
                         _ => None,
                     }
@@ -588,13 +590,24 @@ impl<'a> NsisInstaller<'a> {
     /// installers (NSIS 3.x), each TCHAR is 2 bytes, so the byte position
     /// is `offset * 2`. For ANSI installers, each TCHAR is 1 byte.
     pub fn read_string(&self, offset: i32) -> Result<NsisString, Error> {
-        let string_block_offset = self.block_info(BlockType::Strings).0 as usize;
-        strings::read_string_at(
+        self.string_table().read(offset)
+    }
+
+    /// Returns a view of this installer's string table.
+    ///
+    /// Carries the encoding, special-code range and variable layout that
+    /// decoding depends on. [`read_string`](Self::read_string) is the shorthand
+    /// for `string_table().read(offset)`.
+    pub fn string_table(&self) -> StringTable<'_> {
+        StringTable::new(
             &self.header_data,
-            string_block_offset,
+            self.block_info(BlockType::Strings).0 as usize,
             self.encoding,
             self.ansi_codes,
-            offset,
+            self.nsis2_sub
+                .map_or(strings::DEFAULT_INTERNAL_VARS, |sub| {
+                    sub.internal_var_count()
+                }),
         )
     }
 
