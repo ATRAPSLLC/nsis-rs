@@ -166,22 +166,78 @@ pub fn encode_short(value: u16) -> (u8, u8) {
 /// NSIS strings are not plain text — they contain embedded references to
 /// variables, shell folders, and language strings that are resolved at
 /// install time.
+///
+/// References are resolved to their names while decoding, not while rendering,
+/// because resolving them needs the installer's variable layout and access to
+/// the string table itself. The raw indices are kept alongside the resolved
+/// form so callers can still work from them.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StringSegment {
     /// Literal text content.
     Literal(String),
-    /// Variable reference, e.g., `$INSTDIR`.
+    /// Variable reference, e.g. `$INSTDIR`.
+    Variable {
+        /// Variable index, as stored in the string table.
+        index: u16,
+        /// Rendered name, e.g. `$INSTDIR` for a built-in or `$_3_` for a
+        /// user-defined variable. Borrowed for built-ins.
+        name: Cow<'static, str>,
+    },
+    /// Shell folder constant, e.g. `$APPDATA`.
     ///
-    /// The value is the variable index (0..30).
-    Variable(u16),
-    /// Shell folder constant, e.g., `$APPDATA`.
-    ///
-    /// The value is the CSIDL constant.
-    ShellFolder(u16),
-    /// Language string reference.
-    ///
-    /// The value is the language string index.
+    /// NSIS stores two folder ids: a primary and a fallback used when the
+    /// primary is not available on the running system.
+    ShellFolder {
+        /// Primary folder id (a CSIDL constant), or a registry lookup when bit
+        /// 7 is set.
+        primary: u8,
+        /// Fallback folder id, used when `primary` names nothing known.
+        fallback: u8,
+        /// What the pair resolves to.
+        target: ShellTarget,
+    },
+    /// Language string reference, resolved from the language table at install
+    /// time and so unresolvable here.
     LangString(u16),
+}
+
+/// What a [`StringSegment::ShellFolder`] refers to.
+///
+/// Most shell folders are a CSIDL constant, but NSIS also encodes two
+/// directories that Windows keeps in the registry rather than as a CSIDL. In
+/// that case the low six bits of the primary id are an offset to the registry
+/// value name *within the same string table*.
+///
+/// # Source
+///
+/// 7-Zip `NsisIn.cpp` `GetShellString`; Binary Refinery `xtnsis.py`
+/// `_string_code_shell`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ShellTarget {
+    /// A known shell folder, named without the leading `$` (e.g. `APPDATA`).
+    Csidl(&'static str),
+    /// The Program Files directory, read from the registry at install time.
+    ProgramFiles {
+        /// Whether the 64-bit view of the registry is used.
+        wow64: bool,
+    },
+    /// The Common Files directory, read from the registry at install time.
+    CommonFiles {
+        /// Whether the 64-bit view of the registry is used.
+        wow64: bool,
+    },
+    /// Some other registry value under
+    /// `HKLM\Software\Microsoft\Windows\CurrentVersion`.
+    RegistryValue {
+        /// The value name NSIS reads.
+        name: String,
+        /// Whether the 64-bit view of the registry is used.
+        wow64: bool,
+    },
+    /// Neither id names a known folder, and it is not a registry lookup.
+    Unresolved,
 }
 
 /// A decoded NSIS string composed of literal and special-code segments.
@@ -258,8 +314,12 @@ impl NsisString {
         for segment in &self.segments {
             match segment {
                 StringSegment::Literal(text) => out.push_str(text),
-                StringSegment::Variable(index) => write_variable(out, *index, style),
-                StringSegment::ShellFolder(raw) => write_shell_folder(out, *raw, style),
+                StringSegment::Variable { index, name } => write_variable(out, *index, name, style),
+                StringSegment::ShellFolder {
+                    primary,
+                    fallback,
+                    target,
+                } => write_shell_folder(out, *primary, *fallback, target, style),
                 StringSegment::LangString(id) => match style {
                     // 7-Zip prints the language-string reference unresolved.
                     PathStyle::Installer => {
@@ -312,10 +372,9 @@ pub enum PathStyle {
 }
 
 /// Appends a variable reference in the given style.
-fn write_variable(out: &mut String, index: u16, style: PathStyle) {
-    let name = variable_name(index);
+fn write_variable(out: &mut String, index: u16, name: &str, style: PathStyle) {
     match style {
-        PathStyle::Installer => out.push_str(&name),
+        PathStyle::Installer => out.push_str(name),
         PathStyle::Extraction => match index {
             // The install and output directories *are* the extraction root.
             VAR_INSTDIR | VAR_OUTDIR => {}
@@ -324,7 +383,7 @@ fn write_variable(out: &mut String, index: u16, style: PathStyle) {
             VAR_EXEDIR => out.push_str("_exedir"),
             _ => {
                 out.push('_');
-                out.push_str(name.strip_prefix('$').unwrap_or(&name));
+                out.push_str(name.strip_prefix('$').unwrap_or(name));
             }
         },
     }
@@ -433,10 +492,20 @@ impl fmt::Display for NsisString {
         for segment in &self.segments {
             match segment {
                 StringSegment::Literal(text) => f.write_str(text)?,
-                StringSegment::Variable(index) => f.write_str(&variable_name(*index))?,
-                StringSegment::ShellFolder(raw) => {
+                StringSegment::Variable { name, .. } => f.write_str(name)?,
+                StringSegment::ShellFolder {
+                    primary,
+                    fallback,
+                    target,
+                } => {
                     let mut rendered = String::new();
-                    write_shell_folder(&mut rendered, *raw, PathStyle::Installer);
+                    write_shell_folder(
+                        &mut rendered,
+                        *primary,
+                        *fallback,
+                        target,
+                        PathStyle::Installer,
+                    );
                     f.write_str(&rendered)?;
                 }
                 StringSegment::LangString(id) => write!(f, "$(LSTR_{id})")?,
@@ -446,30 +515,27 @@ impl fmt::Display for NsisString {
     }
 }
 
-/// Reads a string from the string table at the given byte offset.
+/// Reads a string from a table at the given **byte** offset.
 ///
-/// Dispatches to the appropriate encoding-specific reader.
+/// Dispatches to the encoding-specific reader. Prefer
+/// [`StringTable::read`], which takes the TCHAR offsets that NSIS structures
+/// actually store.
 ///
 /// # Errors
 ///
 /// Returns [`crate::error::Error::InvalidStringOffset`] if the offset is beyond
 /// the string table.
-pub fn read_nsis_string(
-    table: &[u8],
-    offset: usize,
-    encoding: StringEncoding,
-    codes: AnsiCodeRange,
-) -> Result<NsisString, Error> {
-    if offset >= table.len() {
+pub fn read_nsis_string(context: &StringTable<'_>, offset: usize) -> Result<NsisString, Error> {
+    if offset >= context.bytes().len() {
         return Err(Error::InvalidStringOffset {
             offset: offset as u32,
         });
     }
 
-    match encoding {
-        StringEncoding::Ansi => ansi::read_ansi_string(table, offset, codes),
-        StringEncoding::Unicode => unicode::read_unicode_string(table, offset),
-        StringEncoding::Park => park::read_park_string(table, offset),
+    match context.encoding() {
+        StringEncoding::Ansi => ansi::read_ansi_string(context, offset),
+        StringEncoding::Unicode => unicode::read_unicode_string(context, offset),
+        StringEncoding::Park => park::read_park_string(context, offset),
     }
 }
 
@@ -534,6 +600,18 @@ impl<'a> StringTable<'a> {
         self.internal_vars
     }
 
+    /// Returns the header block these strings live in.
+    #[inline]
+    pub(crate) fn bytes(&self) -> &'a [u8] {
+        self.data
+    }
+
+    /// Returns the special-code range for an ANSI table.
+    #[inline]
+    pub(crate) fn ansi_code_range(&self) -> AnsiCodeRange {
+        self.ansi_codes
+    }
+
     /// Returns the number of bytes per character in this table.
     #[inline]
     pub fn char_size(&self) -> usize {
@@ -564,9 +642,151 @@ impl<'a> StringTable<'a> {
         let byte_offset = self
             .base
             .saturating_add((offset as usize).saturating_mul(self.char_size()));
-        read_nsis_string(self.data, byte_offset, self.encoding, self.ansi_codes)
+        read_nsis_string(self, byte_offset)
+    }
+
+    /// Resolves a variable index to the name this installer's layout gives it.
+    ///
+    /// Indices below the layout's built-in count name a built-in variable;
+    /// the rest are user-defined and render as `$_N_`, numbered from that
+    /// count. NSIS 2.25 and earlier also shift the indices at and above
+    /// `$EXEPATH`, since two variables were added there in 2.26.
+    ///
+    /// # Source
+    ///
+    /// 7-Zip `NsisIn.cpp` `GetVar2` and `GET_NUM_INTERNAL_VARS`.
+    pub fn variable_name(&self, index: u16) -> Cow<'static, str> {
+        // 2.03 and 2.25 layouts stop short of the modern table; anything at or
+        // above their count is user-defined.
+        if index >= self.internal_vars {
+            return Cow::Owned(format!("$_{}_", index.saturating_sub(self.internal_vars)));
+        }
+        // The 2.04-2.25 layout lacks $EXEPATH and $EXEFILE, so the two
+        // variables that follow them sit two slots lower than in the table.
+        let table_index = if self.internal_vars == NSIS_2_25_INTERNAL_VARS && index >= VAR_EXEPATH {
+            index.saturating_add(2)
+        } else {
+            index
+        };
+        VARIABLE_NAMES.get(table_index as usize).map_or_else(
+            || Cow::Owned(format!("${index}")),
+            |name| Cow::Borrowed(*name),
+        )
+    }
+
+    /// Resolves a shell-folder id pair.
+    ///
+    /// A primary id with bit 7 set is not a CSIDL constant but a registry
+    /// lookup: its low six bits are the offset of the value name within this
+    /// table, and bit 6 selects the 64-bit registry view.
+    pub fn shell_target(&self, primary: u8, fallback: u8) -> ShellTarget {
+        if primary & 0x80 != 0 {
+            let wow64 = primary & 0x40 != 0;
+            // Read the value name as plain text rather than recursively
+            // decoding it. A registry value name is ASCII in practice, and a
+            // crafted file could otherwise point two shell references at each
+            // other and recurse until the stack gives out. 7-Zip notes the same
+            // hazard and declines to follow the reference either.
+            let name = self.read_literal(i32::from(primary & 0x3F));
+            return match name.as_str() {
+                "ProgramFilesDir" => ShellTarget::ProgramFiles { wow64 },
+                "CommonFilesDir" => ShellTarget::CommonFiles { wow64 },
+                _ => ShellTarget::RegistryValue { name, wow64 },
+            };
+        }
+
+        // The fallback applies when the primary names nothing known.
+        for id in [primary, fallback] {
+            if let Some(Some(name)) = SHELL_FOLDER_NAMES.get(id as usize) {
+                return ShellTarget::Csidl(name);
+            }
+        }
+        ShellTarget::Unresolved
+    }
+
+    /// Reads the plain text of the string at a TCHAR offset, stopping at the
+    /// first special code.
+    ///
+    /// Used where a string is known to be plain data — a registry value name —
+    /// and following its references would be neither meaningful nor safe.
+    fn read_literal(&self, offset: i32) -> String {
+        if offset < 0 {
+            return String::new();
+        }
+        let start = self
+            .base
+            .saturating_add((offset as usize).saturating_mul(self.char_size()));
+        let Some(rest) = self.data.get(start..) else {
+            return String::new();
+        };
+
+        let mut text = String::new();
+        match self.encoding {
+            StringEncoding::Ansi => {
+                for &byte in rest {
+                    if byte == 0 || ansi::is_special_code(byte, self.ansi_codes) {
+                        break;
+                    }
+                    text.push(char::from(byte));
+                }
+            }
+            StringEncoding::Unicode | StringEncoding::Park => {
+                for pair in rest.chunks_exact(2) {
+                    let unit = u16::from_le_bytes([
+                        pair.first().copied().unwrap_or(0),
+                        pair.get(1).copied().unwrap_or(0),
+                    ]);
+                    if unit == 0 || unit <= 0x0004 || (0xE000..=0xE003).contains(&unit) {
+                        break;
+                    }
+                    text.extend(char::from_u32(u32::from(unit)));
+                }
+            }
+        }
+        text
     }
 }
+
+/// Helpers shared by the string decoders' tests.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::{
+        Cow, DEFAULT_INTERNAL_VARS, ShellTarget, StringEncoding, StringSegment, StringTable,
+        ansi::AnsiCodeRange,
+    };
+
+    /// The name a modern-layout installer gives a variable index.
+    pub(crate) fn variable_name_for(index: u16) -> Cow<'static, str> {
+        StringTable::new(
+            &[],
+            0,
+            StringEncoding::Unicode,
+            AnsiCodeRange::Nsis3,
+            DEFAULT_INTERNAL_VARS,
+        )
+        .variable_name(index)
+    }
+
+    /// The segment a shell reference packed as `raw` decodes to, for tables
+    /// with no registry-backed folders.
+    pub(crate) fn shell_segment(raw: u16) -> StringSegment {
+        let (primary, fallback) = ((raw & 0xFF) as u8, (raw >> 8) as u8);
+        let target = super::csidl_name(primary)
+            .or_else(|| super::csidl_name(fallback))
+            .map_or(ShellTarget::Unresolved, ShellTarget::Csidl);
+        StringSegment::ShellFolder {
+            primary,
+            fallback,
+            target,
+        }
+    }
+}
+
+/// Number of built-in variables in the NSIS 2.04-2.25 layout.
+const NSIS_2_25_INTERNAL_VARS: u16 = 30;
+
+/// Index of `$EXEPATH`, the first variable added in NSIS 2.26.
+const VAR_EXEPATH: u16 = 27;
 
 /// Number of built-in variables in NSIS 2.26 and later, which NSIS 3 inherited.
 ///
@@ -613,10 +833,15 @@ static VARIABLE_NAMES: [&str; 32] = [
     "$_OUTDIR",    // 31
 ];
 
-/// Returns the conventional NSIS variable name for a given index.
+/// Returns the variable name for an index in the modern (NSIS 2.26+) layout.
 ///
-/// Returns a `&'static str` for built-in variables (0-31) and a heap-allocated
-/// `String` only for user-defined variables (32+), displayed as `$_N_`.
+/// Borrows for the 32 built-in variables and allocates only for user-defined
+/// ones, shown as `$_N_`.
+///
+/// Prefer [`StringTable::variable_name`] where an installer is at hand: NSIS 2
+/// releases before 2.26 have fewer built-ins, so this function names their
+/// variables wrongly. It remains for callers holding a bare index with no
+/// installer context.
 ///
 /// Source: 7-Zip `NsisIn.cpp` `GetVar2`, `state.h`.
 pub fn variable_name(index: u16) -> Cow<'static, str> {
@@ -698,21 +923,24 @@ static SHELL_FOLDER_NAMES: &[Option<&str>] = &[
     Some("COMPUTERSNEARME"),        // 61 CSIDL_COMPUTERSNEARME
 ];
 
-/// Resolves a shell folder value to a display name.
+/// Renders a resolved shell folder the way a decompiled script would show it.
 ///
-/// The `raw` value for NSIS 3 Unicode and Park is a u16 where:
-/// - Low byte (`raw & 0xFF`): primary shell folder ID (CSIDL) or registry
-///   mode flag (if bit 7 is set)
-/// - High byte (`raw >> 8`): fallback shell folder ID
-///
-/// For ANSI mode, the value is a 14-bit decoded index that maps directly
-/// to the CSIDL table.
+/// Registry-backed folders need the string table to resolve, so this takes an
+/// already-resolved [`ShellTarget`] — see [`StringTable::shell_target`]. The
+/// raw ids are only used for the unresolved form.
 ///
 /// Source: 7-Zip `NsisIn.cpp` `GetShellString`.
-pub fn shell_folder_name(raw: u16) -> String {
+pub fn shell_folder_name(primary: u8, fallback: u8, target: &ShellTarget) -> String {
     let mut out = String::new();
-    write_shell_folder(&mut out, raw, PathStyle::Installer);
+    write_shell_folder(&mut out, primary, fallback, target, PathStyle::Installer);
     out
+}
+
+/// Looks up the name of a shell folder id, if it names a known one.
+///
+/// Returns the name without its leading `$`, e.g. `APPDATA`.
+pub fn csidl_name(id: u8) -> Option<&'static str> {
+    SHELL_FOLDER_NAMES.get(id as usize).copied().flatten()
 }
 
 /// Appends a shell-folder reference to `out` in the given style.
@@ -721,58 +949,75 @@ pub fn shell_folder_name(raw: u16) -> String {
 /// byte, fallback in the high byte — and resolves the first of the two that
 /// names a known folder. Writing straight into the caller's buffer keeps path
 /// rendering allocation-free.
-fn write_shell_folder(out: &mut String, raw: u16, style: PathStyle) {
-    let index1 = (raw & 0xFF) as usize;
-    let index2 = (raw >> 8) as usize;
-
+fn write_shell_folder(
+    out: &mut String,
+    primary: u8,
+    fallback: u8,
+    target: &ShellTarget,
+    style: PathStyle,
+) {
     let prefix = match style {
         PathStyle::Installer => '$',
         PathStyle::Extraction => '_',
     };
 
-    // Registry-lookup mode: the low byte's bit 7 marks a folder NSIS reads
-    // from the registry at run time rather than a CSIDL constant.
-    if index1 & 0x80 != 0 {
-        out.push(prefix);
-        out.push_str("PROGRAMFILES");
-        if index1 & 0x40 != 0 {
-            out.push_str("64");
-        }
-        return;
-    }
-
-    // Standard CSIDL lookup — primary, then fallback.
-    for index in [index1, index2] {
-        if let Some(Some(name)) = SHELL_FOLDER_NAMES.get(index) {
+    match target {
+        ShellTarget::Csidl(name) => {
             out.push(prefix);
             out.push_str(name);
-            return;
         }
-    }
-
-    match style {
-        // 7-Zip's wording for an unmappable pair.
-        PathStyle::Installer => {
-            out.push_str("$_ERROR_UNSUPPORTED_SHELL_[");
-            push_u16(out, index1 as u16);
-            out.push(',');
-            push_u16(out, index2 as u16);
-            out.push(']');
+        ShellTarget::ProgramFiles { wow64 } => {
+            out.push(prefix);
+            out.push_str("PROGRAMFILES");
+            if *wow64 {
+                out.push_str("64");
+            }
         }
-        // Brackets and commas are legal in file names but noisy; keep the
-        // extraction form plain and unambiguous.
-        PathStyle::Extraction => {
-            out.push_str("_shell_");
-            push_u16(out, index1 as u16);
-            out.push('_');
-            push_u16(out, index2 as u16);
+        ShellTarget::CommonFiles { wow64 } => {
+            out.push(prefix);
+            out.push_str("COMMONFILES");
+            if *wow64 {
+                out.push_str("64");
+            }
         }
+        ShellTarget::RegistryValue { name, wow64 } => match style {
+            // 7-Zip's wording for a registry value it does not recognise.
+            PathStyle::Installer => {
+                out.push_str("$_ERROR_UNSUPPORTED_VALUE_REGISTRY_(");
+                out.push_str(name);
+                out.push(')');
+            }
+            // Keep the extraction form free of parentheses.
+            PathStyle::Extraction => {
+                out.push_str("_reg");
+                out.push_str(if *wow64 { "64_" } else { "_" });
+                out.push_str(name);
+            }
+        },
+        ShellTarget::Unresolved => match style {
+            PathStyle::Installer => {
+                out.push_str("$_ERROR_UNSUPPORTED_SHELL_[");
+                push_u16(out, u16::from(primary));
+                out.push(',');
+                push_u16(out, u16::from(fallback));
+                out.push(']');
+            }
+            // Brackets and commas are legal in file names but noisy; keep the
+            // extraction form plain and unambiguous.
+            PathStyle::Extraction => {
+                out.push_str("_shell_");
+                push_u16(out, u16::from(primary));
+                out.push('_');
+                push_u16(out, u16::from(fallback));
+            }
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::strings::testing::{shell_segment, variable_name_for};
 
     #[test]
     fn detect_encoding_unicode() {
@@ -874,7 +1119,10 @@ mod tests {
     fn nsis_string_display() {
         let s = NsisString {
             segments: vec![
-                StringSegment::Variable(21),
+                StringSegment::Variable {
+                    index: 21,
+                    name: variable_name_for(21),
+                },
                 StringSegment::Literal("\\program.exe".into()),
             ],
         };
@@ -887,7 +1135,7 @@ mod tests {
             segments: vec![
                 StringSegment::LangString(5),
                 StringSegment::Literal(" in ".into()),
-                StringSegment::ShellFolder(0x001A),
+                shell_segment(0x001A),
             ],
         };
         // 7-Zip prints an unresolved language string as `$(LSTR_n)`.
@@ -897,7 +1145,14 @@ mod tests {
     #[test]
     fn read_string_out_of_bounds() {
         let table = b"hello\0";
-        let result = read_nsis_string(table, 100, StringEncoding::Ansi, AnsiCodeRange::Nsis2);
+        let context = StringTable::new(
+            table,
+            0,
+            StringEncoding::Ansi,
+            AnsiCodeRange::Nsis2,
+            DEFAULT_INTERNAL_VARS,
+        );
+        let result = read_nsis_string(&context, 100);
         assert!(result.is_err());
     }
 
@@ -905,7 +1160,10 @@ mod tests {
     fn to_path_instdir() {
         let s = NsisString {
             segments: vec![
-                StringSegment::Variable(21), // $INSTDIR
+                StringSegment::Variable {
+                    index: 21,
+                    name: variable_name_for(21),
+                }, // $INSTDIR
                 StringSegment::Literal("\\program.exe".into()),
             ],
         };
@@ -916,7 +1174,10 @@ mod tests {
     fn to_path_pluginsdir() {
         let s = NsisString {
             segments: vec![
-                StringSegment::Variable(26), // $PLUGINSDIR
+                StringSegment::Variable {
+                    index: 26,
+                    name: variable_name_for(26),
+                }, // $PLUGINSDIR
                 StringSegment::Literal("\\System.dll".into()),
             ],
         };
@@ -927,7 +1188,10 @@ mod tests {
     fn to_path_temp() {
         let s = NsisString {
             segments: vec![
-                StringSegment::Variable(25), // $TEMP
+                StringSegment::Variable {
+                    index: 25,
+                    name: variable_name_for(25),
+                }, // $TEMP
                 StringSegment::Literal("\\payload.bin".into()),
             ],
         };
@@ -938,7 +1202,10 @@ mod tests {
     fn to_path_nested() {
         let s = NsisString {
             segments: vec![
-                StringSegment::Variable(21), // $INSTDIR
+                StringSegment::Variable {
+                    index: 21,
+                    name: variable_name_for(21),
+                }, // $INSTDIR
                 StringSegment::Literal("\\Lang\\en_US.ini".into()),
             ],
         };
@@ -949,7 +1216,7 @@ mod tests {
     fn to_path_shell_folder() {
         let s = NsisString {
             segments: vec![
-                StringSegment::ShellFolder(0x1A),
+                shell_segment(0x1A),
                 StringSegment::Literal("\\MyApp\\config.ini".into()),
             ],
         };
@@ -1022,7 +1289,7 @@ mod tests {
     #[test]
     fn to_path_names_unmappable_shell_folders() {
         let s = NsisString {
-            segments: vec![StringSegment::ShellFolder(0x3C3C)],
+            segments: vec![shell_segment(0x3C3C)],
         };
         assert_eq!(s.to_path(), "_shell_60_60");
     }
@@ -1031,7 +1298,10 @@ mod tests {
     fn to_install_path_reduces_against_instdir() {
         let s = NsisString {
             segments: vec![
-                StringSegment::Variable(21), // $INSTDIR
+                StringSegment::Variable {
+                    index: 21,
+                    name: variable_name_for(21),
+                }, // $INSTDIR
                 StringSegment::Literal("\\docs\\payload.txt".into()),
             ],
         };
@@ -1046,7 +1316,10 @@ mod tests {
         // 7-Zip reduces only `$INSTDIR`; everything else keeps its own root.
         let s = NsisString {
             segments: vec![
-                StringSegment::Variable(26), // $PLUGINSDIR
+                StringSegment::Variable {
+                    index: 26,
+                    name: variable_name_for(26),
+                }, // $PLUGINSDIR
                 StringSegment::Literal("\\app-64.7z".into()),
             ],
         };
@@ -1063,7 +1336,10 @@ mod tests {
         // 7-Zip strips `$INSTDIR\\`, backslash included, so a bare `$INSTDIR`
         // is left as it is rather than becoming an empty path.
         let s = NsisString {
-            segments: vec![StringSegment::Variable(21)],
+            segments: vec![StringSegment::Variable {
+                index: 21,
+                name: variable_name_for(21),
+            }],
         };
         assert_eq!(s.to_install_path(), "$INSTDIR");
 
@@ -1121,25 +1397,50 @@ mod tests {
 
     #[test]
     fn shell_folder_name_matches_7zip_wording() {
-        assert_eq!(shell_folder_name(0x1A), "$APPDATA");
-        // Neither index names a known folder.
         assert_eq!(
-            shell_folder_name(0x3C3C),
+            shell_folder_name(0x1A, 0, &ShellTarget::Csidl("APPDATA")),
+            "$APPDATA"
+        );
+        // Neither id names a known folder.
+        assert_eq!(
+            shell_folder_name(60, 60, &ShellTarget::Unresolved),
             "$_ERROR_UNSUPPORTED_SHELL_[60,60]"
         );
-        // Registry-lookup mode, with and without the 64-bit flag.
-        assert_eq!(shell_folder_name(0x80), "$PROGRAMFILES");
-        assert_eq!(shell_folder_name(0xC0), "$PROGRAMFILES64");
+        // Registry-backed folders, with and without the 64-bit view.
+        assert_eq!(
+            shell_folder_name(0x80, 0, &ShellTarget::ProgramFiles { wow64: false }),
+            "$PROGRAMFILES"
+        );
+        assert_eq!(
+            shell_folder_name(0xC0, 0, &ShellTarget::CommonFiles { wow64: true }),
+            "$COMMONFILES64"
+        );
+        // A registry value 7-Zip does not recognise.
+        assert_eq!(
+            shell_folder_name(
+                0x81,
+                0,
+                &ShellTarget::RegistryValue {
+                    name: "MediaPathUnexpanded".into(),
+                    wow64: false,
+                }
+            ),
+            "$_ERROR_UNSUPPORTED_VALUE_REGISTRY_(MediaPathUnexpanded)"
+        );
     }
 
     #[test]
-    fn shell_folder_falls_back_to_the_second_index() {
-        // Index 15 is unassigned, so the high byte decides: 0x1A is APPDATA.
-        assert_eq!(shell_folder_name(0x000F | (0x1A << 8)), "$APPDATA");
-        // Neither index is assigned.
-        assert_eq!(
-            shell_folder_name(0x0F0F),
-            "$_ERROR_UNSUPPORTED_SHELL_[15,15]"
+    fn shell_target_falls_back_to_the_second_id() {
+        let table = StringTable::new(
+            &[],
+            0,
+            StringEncoding::Unicode,
+            AnsiCodeRange::Nsis3,
+            DEFAULT_INTERNAL_VARS,
         );
+        // Id 15 is unassigned, so the fallback decides: 0x1A is APPDATA.
+        assert_eq!(table.shell_target(15, 0x1A), ShellTarget::Csidl("APPDATA"));
+        // Neither is assigned.
+        assert_eq!(table.shell_target(15, 15), ShellTarget::Unresolved);
     }
 }
