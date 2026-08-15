@@ -60,8 +60,12 @@ mod field {
     pub const INSTALL_DIRECTORY_PTR: usize = 204;
     /// Offset of the uninstaller data in the data block, or -1.
     pub const UNINSTDATA_OFFSET: usize = 208;
-    /// Number of sections.
+    /// Number of sections. Installers only.
     pub const NUM_SECTIONS: usize = 224;
+    /// First instruction of the uninstall code. Uninstallers only.
+    pub const UNINSTALL_CODE: usize = 112;
+    /// Number of instructions in the uninstall code. Uninstallers only.
+    pub const UNINSTALL_CODE_SIZE: usize = 116;
     /// `.onPrevPage`, then `.onVerifyInstDir` and `.onSelChange`.
     pub const CODE_ON_PREV_PAGE: usize = 228;
 }
@@ -69,12 +73,42 @@ mod field {
 /// The number of `.on*` callbacks 1.x stores, across both runs of fields.
 const CALLBACK_COUNT: usize = 8;
 
+/// Which of the two structs an NSIS 1.x file opens with.
+///
+/// Both start with the same 100-byte `common_header` and then diverge. An
+/// installer continues for another 140 bytes and is followed by a section
+/// table; an uninstaller continues for 20 and has no sections at all — its
+/// code is one run of instructions named by `code` and `code_size`.
+///
+/// Which one applies is not a guess: the FirstHeader says so, in the flag bit
+/// NSIS 1.x spends on `FH_V1_FLAGS_UNINSTALL`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum V1HeaderKind {
+    /// `header` in the 1.98 source: 240 bytes, then the section table.
+    Installer,
+    /// `uninstall_header` in the 1.98 source: 120 bytes, then the entries.
+    Uninstaller,
+}
+
+impl V1HeaderKind {
+    /// Size of the struct in bytes.
+    #[inline]
+    fn size(self) -> usize {
+        match self {
+            V1HeaderKind::Installer => 240,
+            V1HeaderKind::Uninstaller => 120,
+        }
+    }
+}
+
 /// The 240-byte install header of an NSIS 1.x installer.
 ///
 /// See the [module documentation](self) for the layout and its provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct V1Header<'a> {
     bytes: &'a [u8],
+    /// Which of the two structs this is.
+    kind: V1HeaderKind,
     /// Byte offset of the section table, always [`V1Header::SIZE`].
     sections_offset: usize,
     /// Byte offset of the entry table.
@@ -86,15 +120,15 @@ pub struct V1Header<'a> {
 }
 
 impl<'a> V1Header<'a> {
-    /// Size of the header struct in bytes.
+    /// Size of the installer header struct in bytes.
     pub const SIZE: usize = 240;
 
-    /// Parses the install header at the start of a decompressed 1.x header
-    /// block.
+    /// Parses the header at the start of a decompressed 1.x header block.
     ///
     /// # Arguments
     ///
     /// * `data` - The whole decompressed header block, header struct first.
+    /// * `kind` - Which struct it opens with, from the FirstHeader flags.
     ///
     /// # Errors
     ///
@@ -103,9 +137,10 @@ impl<'a> V1Header<'a> {
     /// tables that do not fit in it. Since nothing in the file says which
     /// generation wrote it, that second check is also what tells a 1.x header
     /// apart from a 2.x one — see [`NsisInstaller`](crate::NsisInstaller).
-    pub fn parse(data: &'a [u8]) -> Result<Self, Error> {
-        let bytes = data.get(..Self::SIZE).ok_or(Error::TooShort {
-            expected: Self::SIZE,
+    pub fn parse(data: &'a [u8], kind: V1HeaderKind) -> Result<Self, Error> {
+        let size = kind.size();
+        let bytes = data.get(..size).ok_or(Error::TooShort {
+            expected: size,
             actual: data.len(),
             context: "V1Header",
         })?;
@@ -117,12 +152,16 @@ impl<'a> V1Header<'a> {
 
         // A count that is negative, or large enough to overflow the offset
         // arithmetic below, is not a 1.x header.
-        let num_sections = usize::try_from(read_i32_le(bytes, field::NUM_SECTIONS))
-            .map_err(|_| out_of_range("V1 sections"))?;
+        let num_sections = match kind {
+            V1HeaderKind::Installer => usize::try_from(read_i32_le(bytes, field::NUM_SECTIONS))
+                .map_err(|_| out_of_range("V1 sections"))?,
+            // An uninstaller has no section table.
+            V1HeaderKind::Uninstaller => 0,
+        };
         let num_entries = usize::try_from(read_i32_le(bytes, field::NUM_ENTRIES))
             .map_err(|_| out_of_range("V1 entries"))?;
 
-        let sections_offset = Self::SIZE;
+        let sections_offset = size;
         let entries_offset = num_sections
             .checked_mul(Section::V1_SIZE)
             .and_then(|n| n.checked_add(sections_offset))
@@ -142,6 +181,7 @@ impl<'a> V1Header<'a> {
 
         Ok(Self {
             bytes,
+            kind,
             sections_offset,
             entries_offset,
             strings_offset,
@@ -149,10 +189,32 @@ impl<'a> V1Header<'a> {
         })
     }
 
-    /// Returns the number of sections.
+    /// Returns which of the two 1.x structs this is.
+    #[inline]
+    pub fn kind(&self) -> V1HeaderKind {
+        self.kind
+    }
+
+    /// Returns the number of sections, always `0` for an uninstaller.
     #[inline]
     pub fn num_sections(&self) -> i32 {
-        read_i32_le(self.bytes, field::NUM_SECTIONS)
+        match self.kind {
+            V1HeaderKind::Installer => read_i32_le(self.bytes, field::NUM_SECTIONS),
+            V1HeaderKind::Uninstaller => 0,
+        }
+    }
+
+    /// Returns the entry index and length of an uninstaller's code.
+    ///
+    /// `None` for an installer, whose code is described by its sections.
+    #[inline]
+    pub fn uninstall_code(&self) -> Option<(i32, i32)> {
+        (self.kind == V1HeaderKind::Uninstaller).then(|| {
+            (
+                read_i32_le(self.bytes, field::UNINSTALL_CODE),
+                read_i32_le(self.bytes, field::UNINSTALL_CODE_SIZE),
+            )
+        })
     }
 
     /// Returns the number of entries in the instruction table.
@@ -214,32 +276,42 @@ impl<'a> V1Header<'a> {
     /// Returns the default install directory.
     #[inline]
     pub fn install_dir_ptr(&self) -> i32 {
-        read_i32_le(self.bytes, field::INSTALL_DIRECTORY_PTR)
+        self.installer_field(field::INSTALL_DIRECTORY_PTR)
     }
 
     /// Returns the registry key naming the install directory.
     #[inline]
     pub fn install_reg_key_ptr(&self) -> i32 {
-        read_i32_le(self.bytes, field::INSTALL_REG_KEY_PTR)
+        self.installer_field(field::INSTALL_REG_KEY_PTR)
     }
 
     /// Returns the registry value naming the install directory.
     #[inline]
     pub fn install_reg_value_ptr(&self) -> i32 {
-        read_i32_le(self.bytes, field::INSTALL_REG_VALUE_PTR)
+        self.installer_field(field::INSTALL_REG_VALUE_PTR)
     }
 
     /// Returns the registry root key the install directory is read from.
     #[inline]
     pub fn install_reg_rootkey(&self) -> i32 {
-        read_i32_le(self.bytes, field::INSTALL_REG_ROOTKEY)
+        self.installer_field(field::INSTALL_REG_ROOTKEY)
     }
 
     /// Returns the offset of the uninstaller data within the data block, or
     /// `-1` when the installer writes no uninstaller.
     #[inline]
     pub fn uninstall_data_offset(&self) -> i32 {
-        read_i32_le(self.bytes, field::UNINSTDATA_OFFSET)
+        self.installer_field(field::UNINSTDATA_OFFSET)
+    }
+
+    /// Reads a field only an installer has, reporting `-1` — the value 1.x
+    /// uses for "not set" — when this is an uninstaller.
+    #[inline]
+    fn installer_field(&self, offset: usize) -> i32 {
+        match self.kind {
+            V1HeaderKind::Installer => read_i32_le(self.bytes, offset),
+            V1HeaderKind::Uninstaller => -1,
+        }
     }
 
     /// Returns the `.on*` callbacks, each an entry index or `-1`.
@@ -286,7 +358,7 @@ mod tests {
         let data = header_block(1, 3, 292);
         assert_eq!(data.len(), 624);
 
-        let header = V1Header::parse(&data).expect("a 1.x header");
+        let header = V1Header::parse(&data, V1HeaderKind::Installer).expect("a 1.x header");
         let blocks = header.block_layout();
         assert_eq!(blocks[BlockType::Sections as usize], (240, 1));
         assert_eq!(blocks[BlockType::Entries as usize], (260, 3));
@@ -296,7 +368,9 @@ mod tests {
     #[test]
     fn blocks_1x_does_not_have_are_empty() {
         let data = header_block(1, 3, 16);
-        let blocks = V1Header::parse(&data).expect("a 1.x header").block_layout();
+        let blocks = V1Header::parse(&data, V1HeaderKind::Installer)
+            .expect("a 1.x header")
+            .block_layout();
         for block in [
             BlockType::Pages,
             BlockType::LangTables,
@@ -316,7 +390,7 @@ mod tests {
         let mut data = header_block(1, 3, 0);
         data[field::NUM_ENTRIES..field::NUM_ENTRIES + 4].copy_from_slice(&9999i32.to_le_bytes());
         assert!(matches!(
-            V1Header::parse(&data),
+            V1Header::parse(&data, V1HeaderKind::Installer),
             Err(Error::InvalidBlockOffset { .. })
         ));
     }
@@ -328,7 +402,7 @@ mod tests {
             data[field_offset..field_offset + 4].copy_from_slice(&(-1i32).to_le_bytes());
             assert!(
                 matches!(
-                    V1Header::parse(&data),
+                    V1Header::parse(&data, V1HeaderKind::Installer),
                     Err(Error::InvalidBlockOffset { .. })
                 ),
                 "a negative count at {field_offset} should not parse"
@@ -339,9 +413,37 @@ mod tests {
     #[test]
     fn parse_too_short() {
         assert!(matches!(
-            V1Header::parse(&[0u8; V1Header::SIZE - 1]),
+            V1Header::parse(&[0u8; V1Header::SIZE - 1], V1HeaderKind::Installer),
             Err(Error::TooShort { .. })
         ));
+    }
+
+    #[test]
+    fn an_uninstaller_has_a_shorter_header_and_no_sections() {
+        // Both structs open with the same 100-byte common_header, so the entry
+        // count is in the same place; an uninstaller then stops 120 bytes in
+        // and its entries start there, where an installer's section table
+        // would be. Reading one as the other puts the entry table 120 bytes
+        // late and decodes string bytes as instructions.
+        let mut data = vec![0u8; 120];
+        data[field::NUM_ENTRIES..field::NUM_ENTRIES + 4].copy_from_slice(&6i32.to_le_bytes());
+        data[field::UNINSTALL_CODE..field::UNINSTALL_CODE + 4].copy_from_slice(&0i32.to_le_bytes());
+        data[field::UNINSTALL_CODE_SIZE..field::UNINSTALL_CODE_SIZE + 4]
+            .copy_from_slice(&5i32.to_le_bytes());
+        data.resize(120 + 6 * Entry::V1_SIZE + 32, 0);
+
+        let header = V1Header::parse(&data, V1HeaderKind::Uninstaller).expect("an uninstaller");
+        let blocks = header.block_layout();
+        assert_eq!(header.num_sections(), 0);
+        assert_eq!(blocks[BlockType::Sections as usize], (120, 0));
+        assert_eq!(blocks[BlockType::Entries as usize], (120, 6));
+        assert_eq!(blocks[BlockType::Strings as usize], (120 + 6 * 24, 32));
+        assert_eq!(header.uninstall_code(), Some((0, 5)));
+
+        // The fields only an installer has must not be read out of the
+        // instructions that follow.
+        assert_eq!(header.install_dir_ptr(), -1);
+        assert_eq!(header.uninstall_data_offset(), -1);
     }
 
     #[test]
@@ -351,7 +453,7 @@ mod tests {
         for (i, offset) in [76, 80, 84, 88, 92, 228, 232, 236].into_iter().enumerate() {
             data[offset..offset + 4].copy_from_slice(&(i as i32).to_le_bytes());
         }
-        let header = V1Header::parse(&data).expect("a 1.x header");
+        let header = V1Header::parse(&data, V1HeaderKind::Installer).expect("a 1.x header");
         assert_eq!(header.callbacks(), [0, 1, 2, 3, 4, 5, 6, 7]);
     }
 }

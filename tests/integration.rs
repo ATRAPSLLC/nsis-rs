@@ -1375,65 +1375,86 @@ fn nsis1x_variables_are_one_byte_each() {
     );
 }
 
-/// Rewrites an NSIS 2.x bzip2 stream into the layout NSIS 1.x wrote.
-///
-/// The two differ by one bit: 1.x kept standard bzip2's `randomised` flag
-/// between a block's header byte and its origPtr. Inserting a zero bit there
-/// turns one into the other, which is only this simple for a single-block
-/// stream — every fixture header is far under bzip2's 900 KB block size.
-fn to_nsis1_bzip2_layout(stream: &[u8]) -> Vec<u8> {
-    let (header, rest) = stream.split_at(1);
-    assert_eq!(header[0], 0x31, "expected a bzip2 block header byte");
+#[test]
+fn nsis1x_bzip2_is_solid_and_decodes() {
+    // NSIS 1.98 picks its compressor when makensis is built, so the bzip2
+    // compiler is a second binary — and it was built with NSIS_COMPRESS_WHOLE,
+    // making its output solid too. 1.x bzip2 keeps standard bzip2's per-block
+    // randomised flag, which NSIS 2.0 dropped; read under the 2.x layout every
+    // block is one bit out of alignment and nothing decodes at all.
+    let inst = parse_fixture("nsis1x_bzip2.exe");
+    assert_eq!(inst.version(), NsisVersion::V1);
+    assert_eq!(
+        inst.compression(),
+        nsis::decompress::CompressionMethod::Bzip2
+    );
+    assert_eq!(
+        inst.compression_mode(),
+        nsis::decompress::CompressionMode::Solid
+    );
+    assert!(matches!(inst.solid_status(), SolidStatus::Complete));
 
-    let mut out = vec![header[0]];
-    let mut carry = 0u8;
-    for &byte in rest {
-        // Shift everything down one bit, feeding in a zero: the randomised
-        // flag NSIS 2.x stopped writing.
-        out.push(carry | (byte >> 1));
-        carry = (byte & 1) << 7;
-    }
-    out.push(carry);
-    out
-}
-
-/// Returns the compressed header block of a fixture, without its length prefix.
-fn compressed_header_block(name: &str) -> &'static [u8] {
-    let data = fixture_bytes(name);
-    let signature = b"\xEF\xBE\xAD\xDENullsoftInst";
-    let at = data
-        .windows(signature.len())
-        .position(|w| w == signature)
-        .expect("an NSIS signature");
-    // The FirstHeader starts one field before the signature, and the block's
-    // 4-byte length prefix follows it.
-    &data[at - 4 + FirstHeader::SIZE + 4..]
+    let file = inst.files().next().unwrap().unwrap();
+    assert_eq!(
+        file.dest_path().unwrap().to_string(),
+        "$INSTDIR\\payload.txt"
+    );
+    let content = file.decompress().unwrap();
+    assert!(content.starts_with(b"This is a test payload"));
+    assert_eq!(content.len(), 54, "the build log reports 54 bytes");
 }
 
 #[test]
-fn nsis1x_bzip2_keeps_the_randomised_flag_2x_dropped() {
-    // No NSIS 1.x bzip2 installer is small enough to commit, so the layout is
-    // checked against a real 2.x stream rewritten into it. Reading this under
-    // the 2.x layout misaligns everything from origPtr on, which is how NSIS's
-    // own 1.98 distribution — a solid bzip2 1.x installer — used to fail.
-    let stream = compressed_header_block("bzip2_nonsolid.exe");
-    let expected = nsis::decompress::decompress_block(
-        stream,
-        nsis::decompress::CompressionMethod::Bzip2,
-        nsis::decompress::DecodeLimit::Truncate(1 << 20),
-    )
-    .expect("the 2.x stream decodes")
-    .data;
-    assert!(!expected.is_empty());
+fn a_nsis1x_uninstaller_round_trips() {
+    // NSIS 1.x WriteUninstaller takes only a name; where the uninstaller data
+    // lives is a header field, because 1.x has nowhere else to put it. Read as
+    // a 2.x instruction that operand does not exist and reads as 0 — the start
+    // of the data block — so this used to extract whatever happened to be
+    // there.
+    let inst = parse_fixture("nsis1x_uninst.exe");
+    let uninstaller = inst.uninstallers().next().unwrap().unwrap();
+    assert_eq!(
+        uninstaller.path().unwrap().to_string(),
+        "$INSTDIR\\uninst.exe"
+    );
+    assert!(
+        uninstaller.data_offset() > 0,
+        "the offset comes from the header, not the instruction"
+    );
 
-    let as_v1 = to_nsis1_bzip2_layout(stream);
-    let decoded = nsis::decompress::decompress_block(
-        &as_v1,
-        nsis::decompress::CompressionMethod::Bzip2,
-        nsis::decompress::DecodeLimit::Truncate(1 << 20),
-    )
-    .expect("the 1.x layout decodes too")
-    .data;
+    let stub = uninstaller.decompress().expect("the uninstaller extracts");
+    assert_eq!(&stub[..2], b"MZ", "should be a PE");
 
-    assert_eq!(decoded, expected);
+    // The extracted uninstaller is itself a 1.x file, and one with a different
+    // header again: 120 bytes and no section table, so its instructions start
+    // where an installer's sections would. Read as an installer, the entry
+    // table lands 120 bytes late and string bytes decode as opcodes.
+    let uninst = NsisInstaller::from_bytes(&stub).expect("the uninstaller parses");
+    assert_eq!(uninst.version(), NsisVersion::V1);
+    assert!(uninst.is_uninstaller());
+    assert_eq!(
+        uninst.section_count(),
+        0,
+        "1.x uninstallers have no sections"
+    );
+
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for entry in uninst.entries() {
+        line.clear();
+        uninst.write_entry(&mut line, &entry.unwrap());
+        lines.push(line.clone());
+    }
+    // Exactly the uninstall section of nsis1x_uninst.nsi.
+    assert_eq!(
+        lines,
+        [
+            r#"EW_DELETEFILE filename="$INSTDIR\\payload.txt", rebootok=0"#,
+            r#"EW_DELETEFILE filename="$INSTDIR\\docs\\config.ini", rebootok=0"#,
+            r#"EW_DELETEFILE filename="$INSTDIR\\uninst.exe", rebootok=0"#,
+            r#"EW_RMDIR path="$INSTDIR\\docs", recursive=0"#,
+            r#"EW_RMDIR path="$INSTDIR", recursive=0"#,
+            "EW_RET",
+        ]
+    );
 }
