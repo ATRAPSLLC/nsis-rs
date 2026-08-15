@@ -16,7 +16,7 @@ pub mod version;
 use crate::{nsis::entry::Entry, util::read_i32_le};
 
 pub use info::OpcodeInfo;
-pub use version::{NsisVersion, ParkSubVersion};
+pub use version::{Nsis2SubVersion, NsisVersion, ParkSubVersion};
 
 // Opcode indices from `fileform.h`.
 // These are the `which` values stored in entry structures.
@@ -213,6 +213,101 @@ pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
     a
 }
 
+/// Detects which NSIS 2.x variable layout an installer uses.
+///
+/// The layouts are indistinguishable from the header alone, so this replicates
+/// 7-Zip's approach and looks for instructions that name a variable whose index
+/// moved between releases:
+///
+/// - `EW_GETDLGITEM` whose second parameter is exactly `$HWNDPARENT` proves the
+///   installer predates 2.26, where that variable sat at index 27 rather than
+///   29. If its first parameter is also 29 — `$_OUTDIR` in that layout — the
+///   installer predates 2.04.
+/// - `EW_ASSIGNVAR` writing variable 29 from exactly `$OUTDIR`, with no
+///   substring parameters, is the `StrCpy $_OUTDIR $OUTDIR` that only the
+///   pre-2.26 layout produces.
+///
+/// Returns [`Nsis2SubVersion::From226`] when nothing matches.
+///
+/// # Limits
+///
+/// Both markers are instructions a script has to actually use. An installer
+/// that never touches a dialog item and never copies `$OUTDIR` — a plain
+/// `SetOutPath` plus `File` script, for instance — carries no evidence of its
+/// layout at all, and is reported as [`Nsis2SubVersion::From226`] whatever
+/// version built it. 7-Zip has the same blind spot and makes the same
+/// assumption. It only matters for installers that also reference a variable
+/// whose index moved, which such a minimal script does not.
+///
+/// `read_var_index` resolves a string-table offset to the variable index of a
+/// string consisting of exactly one variable reference, or `None` for anything
+/// else — the equivalent of 7-Zip's `IsVarStr`.
+///
+/// # Source
+///
+/// 7-Zip `NsisIn.cpp`, the `IsNsis225` / `IsNsis200` block of `DetectNsisType`.
+pub fn detect_nsis2_sub_version(
+    header_data: &[u8],
+    entry_block_offset: usize,
+    entry_count: usize,
+    read_var_index: impl Fn(i32) -> Option<u16>,
+) -> Nsis2SubVersion {
+    /// `$HWNDPARENT` in the pre-2.26 layout.
+    const VAR_HWNDPARENT_225: u16 = 27;
+    /// `$OUTDIR`, at the same index in every layout.
+    const VAR_OUTDIR: u16 = 22;
+    /// `$_OUTDIR` in the pre-2.26 layout.
+    const VAR_SPEC_OUTDIR_225: i32 = 29;
+
+    let mut sub = Nsis2SubVersion::From226;
+
+    for i in 0..entry_count {
+        let Some(offset) = i
+            .checked_mul(Entry::SIZE)
+            .and_then(|n| n.checked_add(entry_block_offset))
+        else {
+            break;
+        };
+        let Some(end) = offset.checked_add(Entry::SIZE) else {
+            break;
+        };
+        if end > header_data.len() {
+            break;
+        }
+
+        let which = read_i32_le(header_data, offset);
+        let param = |n: usize| {
+            let slot = 4_usize.saturating_add(4_usize.saturating_mul(n));
+            read_i32_le(header_data, offset.saturating_add(slot))
+        };
+
+        match which {
+            EW_GETDLGITEM => {
+                if read_var_index(param(1)) == Some(VAR_HWNDPARENT_225) {
+                    sub = Nsis2SubVersion::UpTo225;
+                    if param(0) == VAR_SPEC_OUTDIR_225 {
+                        // Only 2.03 and earlier put `$_OUTDIR` in a dialog-item
+                        // handle; this is the strongest signal available, so
+                        // stop looking.
+                        return Nsis2SubVersion::UpTo203;
+                    }
+                }
+            }
+            EW_ASSIGNVAR
+                if param(0) == VAR_SPEC_OUTDIR_225
+                    && param(2) == 0
+                    && param(3) == 0
+                    && read_var_index(param(1)) == Some(VAR_OUTDIR) =>
+            {
+                sub = Nsis2SubVersion::UpTo225;
+            }
+            _ => {}
+        }
+    }
+
+    sub
+}
+
 /// Detects the Park sub-version by scanning entry opcodes.
 ///
 /// Replicates 7-Zip's `DetectNsisType()` logic: find entries whose raw
@@ -307,6 +402,129 @@ pub fn lookup_normalized(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds an entry block from `(opcode, params)` pairs.
+    fn entry_block(entries: &[(i32, [i32; 6])]) -> Vec<u8> {
+        let mut data = Vec::new();
+        for (which, params) in entries {
+            data.extend_from_slice(&which.to_le_bytes());
+            for param in params {
+                data.extend_from_slice(&param.to_le_bytes());
+            }
+        }
+        data
+    }
+
+    /// Resolves the string offsets used by the tests below to variable indices,
+    /// standing in for a real string table: offset 100 is `$HWNDPARENT` in the
+    /// pre-2.26 layout, offset 200 is `$OUTDIR`, and anything else is not a
+    /// bare variable reference.
+    fn var_index(offset: i32) -> Option<u16> {
+        match offset {
+            100 => Some(27),
+            200 => Some(22),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn nsis2_sub_version_defaults_to_the_modern_layout() {
+        // A script that touches no dialog item and copies no `$OUTDIR` leaves
+        // no evidence of its layout, whatever version built it.
+        let data = entry_block(&[
+            (EW_CREATEDIR, [1, 1, 0, 0, 0, 0]),
+            (EW_EXTRACTFILE, [0, 2, 0, 0, 0, 0]),
+            (EW_RET, [0; 6]),
+        ]);
+        assert_eq!(
+            detect_nsis2_sub_version(&data, 0, 3, var_index),
+            Nsis2SubVersion::From226
+        );
+    }
+
+    #[test]
+    fn getdlgitem_on_hwndparent_means_pre_226() {
+        // `$HWNDPARENT` sat at index 27 before 2.26.
+        let data = entry_block(&[(EW_GETDLGITEM, [0, 100, 0, 0, 0, 0])]);
+        assert_eq!(
+            detect_nsis2_sub_version(&data, 0, 1, var_index),
+            Nsis2SubVersion::UpTo225
+        );
+    }
+
+    #[test]
+    fn getdlgitem_writing_spec_outdir_means_pre_204() {
+        // Storing the handle in variable 29 — `$_OUTDIR` in that layout — only
+        // happens on 2.03 and earlier.
+        let data = entry_block(&[(EW_GETDLGITEM, [29, 100, 0, 0, 0, 0])]);
+        assert_eq!(
+            detect_nsis2_sub_version(&data, 0, 1, var_index),
+            Nsis2SubVersion::UpTo203
+        );
+    }
+
+    #[test]
+    fn strcpy_spec_outdir_from_outdir_means_pre_226() {
+        // `StrCpy $_OUTDIR $OUTDIR` with no substring parameters.
+        let data = entry_block(&[(EW_ASSIGNVAR, [29, 200, 0, 0, 0, 0])]);
+        assert_eq!(
+            detect_nsis2_sub_version(&data, 0, 1, var_index),
+            Nsis2SubVersion::UpTo225
+        );
+    }
+
+    #[test]
+    fn strcpy_with_substring_parameters_is_not_the_marker() {
+        // `StrCpy $_OUTDIR $OUTDIR 3 1` copies a slice, not the whole path, so
+        // it is not the compiler-generated save.
+        let data = entry_block(&[(EW_ASSIGNVAR, [29, 200, 3, 1, 0, 0])]);
+        assert_eq!(
+            detect_nsis2_sub_version(&data, 0, 1, var_index),
+            Nsis2SubVersion::From226
+        );
+    }
+
+    #[test]
+    fn markers_naming_other_variables_are_ignored() {
+        // A dialog item fetched into some other variable says nothing: offset
+        // 300 is not a bare variable reference at all.
+        let data = entry_block(&[
+            (EW_GETDLGITEM, [0, 300, 0, 0, 0, 0]),
+            (EW_ASSIGNVAR, [5, 200, 0, 0, 0, 0]),
+        ]);
+        assert_eq!(
+            detect_nsis2_sub_version(&data, 0, 2, var_index),
+            Nsis2SubVersion::From226
+        );
+    }
+
+    #[test]
+    fn the_strongest_marker_wins_over_a_later_weaker_one() {
+        // The 2.03 signal short-circuits, so a later `StrCpy` cannot pull the
+        // verdict back up to 2.25.
+        let data = entry_block(&[
+            (EW_GETDLGITEM, [29, 100, 0, 0, 0, 0]),
+            (EW_ASSIGNVAR, [29, 200, 0, 0, 0, 0]),
+        ]);
+        assert_eq!(
+            detect_nsis2_sub_version(&data, 0, 2, var_index),
+            Nsis2SubVersion::UpTo203
+        );
+    }
+
+    #[test]
+    fn entry_count_beyond_the_block_stops_the_scan() {
+        // A truncated header must not read past the end of the block.
+        let data = entry_block(&[(EW_GETDLGITEM, [29, 100, 0, 0, 0, 0])]);
+        assert_eq!(
+            detect_nsis2_sub_version(&data, 0, 999, var_index),
+            Nsis2SubVersion::UpTo203
+        );
+        assert_eq!(
+            detect_nsis2_sub_version(&[], 0, 999, var_index),
+            Nsis2SubVersion::From226
+        );
+    }
 
     #[test]
     fn lookup_valid_opcode() {

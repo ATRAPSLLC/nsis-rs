@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Nsis2SubVersion`, identifying which NSIS 2.x variable layout an installer
+  uses (`UpTo203`, `UpTo225`, `From226`), with `internal_var_count()` and
+  `spec_outdir_var_index()`. Read it with `NsisInstaller::nsis2_sub_version()`,
+  which returns `None` for every other version.
+- `strings::detect_ansi_nsis3()`, which reports whether an ANSI string table
+  uses the NSIS 3 special-code range, and `strings::read_string_at()`, the
+  free function behind `NsisInstaller::read_string`.
 - `SolidStatus`, reporting how an installer's solid file-data stream
   decompressed: `NotSolid`, `Complete`, `Truncated { limit }`, or
   `Failed(Error)`. Read it with `NsisInstaller::solid_status()`.
@@ -18,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `NsisVersion::detect` takes the string table as a third
+  argument, which it needs to tell an ANSI NSIS-3 installer from an NSIS 2 one.
 - **Breaking:** `decompress::decompress_block` and the per-codec entry points
   (`decompress_deflate`, `decompress_bzip2`, `decompress_lzma`) return
   `Decoded` instead of `Vec<u8>`. Callers that only want the bytes can take
@@ -25,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ANSI installers built by makensis 3.x are no longer reported as NSIS 2.
+  Version detection mapped an ANSI string table to NSIS 2 unconditionally, but
+  makensis 3.x compiles an ANSI target whenever a script omits `Unicode true`.
+  The two are now told apart by which special-code range the table uses, as
+  7-Zip's `DetectNsisType` does. Latin-1 text cannot be mistaken for the NSIS 2
+  range: `0xFC-0xFF` are the ordinary characters `ü ý þ ÿ`, so detection keys
+  off the NSIS 3 codes instead.
 - Installer stubs that a strict PE parse rejects are now parsed. Overlay
   detection needs only the optional header and section table, so the PE is
   parsed permissively with resources, imports, TLS, certificates and RVA
