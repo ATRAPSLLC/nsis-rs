@@ -11,7 +11,10 @@ use crate::{
         firstheader::{FH_FLAGS_UNINSTALL, FirstHeader},
     },
     installer::{
-        analysis::{self, ExecIter, PluginCallIter, RegistryIter, ShortcutIter, UninstallerIter},
+        analysis::{
+            self, ExecIter, InstructionIter, PluginCallIter, RegistryIter, ShortcutIter,
+            UninstallerIter,
+        },
         callback::Callback,
         files::FileIter,
         script::{self, ScriptAnalysis},
@@ -719,6 +722,39 @@ impl<'a> NsisInstaller<'a> {
                 .map_or(strings::DEFAULT_INTERNAL_VARS, |sub| {
                     sub.internal_var_count()
                 }),
+        )
+    }
+
+    /// Returns an iterator over every instruction in the script.
+    ///
+    /// Walks the entry stream once, classifying each entry into an
+    /// [`Instruction`](crate::installer::Instruction). The typed iterators —
+    /// [`files`](Self::files), [`plugin_calls`](Self::plugin_calls),
+    /// [`registry_ops`](Self::registry_ops) and the rest — are filters over
+    /// this same walk, so use this directly when you want more than one kind
+    /// of instruction and would otherwise traverse the script several times.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use nsis::{Instruction, NsisInstaller};
+    ///
+    /// # let data = std::fs::read("installer.exe").unwrap();
+    /// # let inst = NsisInstaller::from_bytes(&data).unwrap();
+    /// let (mut files, mut registry) = (0, 0);
+    /// for instruction in inst.instructions() {
+    ///     match instruction.unwrap() {
+    ///         Instruction::File(_) => files += 1,
+    ///         Instruction::Registry(_) => registry += 1,
+    ///         _ => {}
+    ///     }
+    /// }
+    /// ```
+    pub fn instructions(&self) -> InstructionIter<'_> {
+        let (_, count) = self.block_info(BlockType::Entries);
+        InstructionIter::new(
+            self,
+            EntryIter::new(self.block_data(BlockType::Entries), count.max(0) as usize),
         )
     }
 

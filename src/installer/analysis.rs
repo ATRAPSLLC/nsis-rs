@@ -42,7 +42,7 @@ use core::fmt;
 use crate::{
     decompress::{self, CompressionMode},
     error::Error,
-    installer::NsisInstaller,
+    installer::{ExtractedFile, NsisInstaller},
     nsis::entry::{Entry, EntryIter},
     opcode,
     strings::NsisString,
@@ -699,191 +699,187 @@ impl<'a> Uninstaller<'a> {
     }
 }
 
-/// Iterator over plugin DLL calls (`EW_REGISTERDLL` entries).
+/// One instruction from an installer's script, typed by what it does.
 ///
-/// Created by [`NsisInstaller::plugin_calls`].
-pub struct PluginCallIter<'a> {
+/// Yielded by [`NsisInstaller::instructions`], which walks the entry stream
+/// once and classifies as it goes. The typed iterators — [`files`],
+/// [`plugin_calls`], [`registry_ops`] and the rest — are filters over this
+/// walk, so a caller that wants several kinds of instruction can take them
+/// from a single pass instead of one pass each.
+///
+/// [`files`]: NsisInstaller::files
+/// [`plugin_calls`]: NsisInstaller::plugin_calls
+/// [`registry_ops`]: NsisInstaller::registry_ops
+#[non_exhaustive]
+pub enum Instruction<'a> {
+    /// `EW_EXTRACTFILE` — an embedded file.
+    File(ExtractedFile<'a>),
+    /// `EW_REGISTERDLL` — a plugin or DLL registration call.
+    PluginCall(PluginCall<'a>),
+    /// `EW_EXECUTE` or `EW_SHELLEXEC` — a command execution.
+    Exec(ExecCommand<'a>),
+    /// `EW_WRITEREG`, `EW_DELREG` or `EW_READREGSTR` — a registry operation.
+    Registry(RegistryOp<'a>),
+    /// `EW_CREATESHORTCUT` — a shortcut.
+    Shortcut(Shortcut<'a>),
+    /// `EW_WRITEUNINSTALLER` — an embedded uninstaller stub.
+    Uninstaller(Uninstaller<'a>),
+    /// Any other instruction, exposed as its raw entry.
+    Other(Entry<'a>),
+}
+
+impl<'a> Instruction<'a> {
+    /// Returns the underlying entry, whatever the instruction is.
+    pub fn entry(&self) -> &Entry<'a> {
+        match self {
+            Instruction::File(file) => file.entry(),
+            Instruction::PluginCall(call) => call.entry(),
+            Instruction::Exec(exec) => exec.entry(),
+            Instruction::Registry(op) => op.entry(),
+            Instruction::Shortcut(shortcut) => shortcut.entry(),
+            Instruction::Uninstaller(uninstaller) => uninstaller.entry(),
+            Instruction::Other(entry) => entry,
+        }
+    }
+}
+
+impl<'a> ExecCommand<'a> {
+    /// Returns the underlying entry, whichever form the command takes.
+    pub fn entry(&self) -> &Entry<'a> {
+        match self {
+            ExecCommand::Exec(op) => op.entry(),
+            ExecCommand::ShellExec(op) => op.entry(),
+        }
+    }
+}
+
+impl<'a> RegistryOp<'a> {
+    /// Returns the underlying entry, whichever operation this is.
+    pub fn entry(&self) -> &Entry<'a> {
+        match self {
+            RegistryOp::Write(op) => op.entry(),
+            RegistryOp::Delete(op) => op.entry(),
+            RegistryOp::Read(op) => op.entry(),
+        }
+    }
+}
+
+/// Iterator over an installer's instructions.
+///
+/// Created by [`NsisInstaller::instructions`].
+pub struct InstructionIter<'a> {
     installer: &'a NsisInstaller<'a>,
     entries: EntryIter<'a>,
 }
 
-impl<'a> PluginCallIter<'a> {
+impl<'a> InstructionIter<'a> {
     pub(crate) fn new(installer: &'a NsisInstaller<'a>, entries: EntryIter<'a>) -> Self {
         Self { installer, entries }
     }
 }
 
-impl<'a> Iterator for PluginCallIter<'a> {
-    type Item = Result<PluginCall<'a>, Error>;
+impl<'a> Iterator for InstructionIter<'a> {
+    type Item = Result<Instruction<'a>, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let entry = match self.entries.next()? {
-                Ok(e) => e,
-                Err(e) => return Some(Err(e)),
-            };
-            if self.installer.normalize_opcode(entry.which()) == opcode::EW_REGISTERDLL {
-                return Some(Ok(PluginCall {
-                    installer: self.installer,
-                    entry,
-                }));
+        let entry = match self.entries.next()? {
+            Ok(entry) => entry,
+            Err(e) => return Some(Err(e)),
+        };
+        let installer = self.installer;
+
+        let instruction = match installer.normalize_opcode(entry.which()) {
+            opcode::EW_EXTRACTFILE => {
+                let file = ExtractedFile::new(installer, entry);
+                if let Err(e) = file.validate_data_bounds() {
+                    return Some(Err(e));
+                }
+                Instruction::File(file)
+            }
+            opcode::EW_REGISTERDLL => Instruction::PluginCall(PluginCall { installer, entry }),
+            opcode::EW_EXECUTE => Instruction::Exec(ExecCommand::Exec(ExecOp { installer, entry })),
+            opcode::EW_SHELLEXEC => {
+                Instruction::Exec(ExecCommand::ShellExec(ShellExecOp { installer, entry }))
+            }
+            opcode::EW_WRITEREG => {
+                Instruction::Registry(RegistryOp::Write(RegWrite { installer, entry }))
+            }
+            opcode::EW_DELREG => {
+                Instruction::Registry(RegistryOp::Delete(RegDelete { installer, entry }))
+            }
+            opcode::EW_READREGSTR => {
+                Instruction::Registry(RegistryOp::Read(RegRead { installer, entry }))
+            }
+            opcode::EW_CREATESHORTCUT => Instruction::Shortcut(Shortcut { installer, entry }),
+            opcode::EW_WRITEUNINSTALLER => {
+                Instruction::Uninstaller(Uninstaller { installer, entry })
+            }
+            _ => Instruction::Other(entry),
+        };
+        Some(Ok(instruction))
+    }
+}
+
+/// Declares an iterator that filters [`InstructionIter`] down to one kind.
+macro_rules! instruction_filter {
+    ($(#[$meta:meta])* $name:ident, $variant:ident, $item:ty) => {
+        $(#[$meta])*
+        pub struct $name<'a>(InstructionIter<'a>);
+
+        impl<'a> $name<'a> {
+            pub(crate) fn new(installer: &'a NsisInstaller<'a>, entries: EntryIter<'a>) -> Self {
+                Self(InstructionIter::new(installer, entries))
             }
         }
-    }
-}
 
-/// Iterator over execution commands (`EW_EXECUTE` and `EW_SHELLEXEC` entries).
-///
-/// Created by [`NsisInstaller::exec_commands`].
-pub struct ExecIter<'a> {
-    installer: &'a NsisInstaller<'a>,
-    entries: EntryIter<'a>,
-}
+        impl<'a> Iterator for $name<'a> {
+            type Item = Result<$item, Error>;
 
-impl<'a> ExecIter<'a> {
-    pub(crate) fn new(installer: &'a NsisInstaller<'a>, entries: EntryIter<'a>) -> Self {
-        Self { installer, entries }
-    }
-}
-
-impl<'a> Iterator for ExecIter<'a> {
-    type Item = Result<ExecCommand<'a>, Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let entry = match self.entries.next()? {
-                Ok(e) => e,
-                Err(e) => return Some(Err(e)),
-            };
-            match self.installer.normalize_opcode(entry.which()) {
-                opcode::EW_EXECUTE => {
-                    return Some(Ok(ExecCommand::Exec(ExecOp {
-                        installer: self.installer,
-                        entry,
-                    })));
+            fn next(&mut self) -> Option<Self::Item> {
+                loop {
+                    match self.0.next()? {
+                        Ok(Instruction::$variant(value)) => return Some(Ok(value)),
+                        Ok(_) => continue,
+                        Err(e) => return Some(Err(e)),
+                    }
                 }
-                opcode::EW_SHELLEXEC => {
-                    return Some(Ok(ExecCommand::ShellExec(ShellExecOp {
-                        installer: self.installer,
-                        entry,
-                    })));
-                }
-                _ => continue,
             }
         }
-    }
+    };
 }
 
-/// Iterator over registry operations (`EW_WRITEREG`, `EW_DELREG`, `EW_READREGSTR` entries).
-///
-/// Created by [`NsisInstaller::registry_ops`].
-pub struct RegistryIter<'a> {
-    installer: &'a NsisInstaller<'a>,
-    entries: EntryIter<'a>,
+instruction_filter! {
+    /// Iterator over plugin DLL calls (`EW_REGISTERDLL` entries).
+    ///
+    /// Created by [`NsisInstaller::plugin_calls`].
+    PluginCallIter, PluginCall, PluginCall<'a>
 }
 
-impl<'a> RegistryIter<'a> {
-    pub(crate) fn new(installer: &'a NsisInstaller<'a>, entries: EntryIter<'a>) -> Self {
-        Self { installer, entries }
-    }
+instruction_filter! {
+    /// Iterator over execution commands (`EW_EXECUTE` and `EW_SHELLEXEC`).
+    ///
+    /// Created by [`NsisInstaller::exec_commands`].
+    ExecIter, Exec, ExecCommand<'a>
 }
 
-impl<'a> Iterator for RegistryIter<'a> {
-    type Item = Result<RegistryOp<'a>, Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let entry = match self.entries.next()? {
-                Ok(e) => e,
-                Err(e) => return Some(Err(e)),
-            };
-            match self.installer.normalize_opcode(entry.which()) {
-                opcode::EW_WRITEREG => {
-                    return Some(Ok(RegistryOp::Write(RegWrite {
-                        installer: self.installer,
-                        entry,
-                    })));
-                }
-                opcode::EW_DELREG => {
-                    return Some(Ok(RegistryOp::Delete(RegDelete {
-                        installer: self.installer,
-                        entry,
-                    })));
-                }
-                opcode::EW_READREGSTR => {
-                    return Some(Ok(RegistryOp::Read(RegRead {
-                        installer: self.installer,
-                        entry,
-                    })));
-                }
-                _ => continue,
-            }
-        }
-    }
+instruction_filter! {
+    /// Iterator over registry operations (`EW_WRITEREG`, `EW_DELREG`,
+    /// `EW_READREGSTR`).
+    ///
+    /// Created by [`NsisInstaller::registry_ops`].
+    RegistryIter, Registry, RegistryOp<'a>
 }
 
-/// Iterator over shortcut creation operations (`EW_CREATESHORTCUT` entries).
-///
-/// Created by [`NsisInstaller::shortcuts`].
-pub struct ShortcutIter<'a> {
-    installer: &'a NsisInstaller<'a>,
-    entries: EntryIter<'a>,
+instruction_filter! {
+    /// Iterator over shortcut creation operations (`EW_CREATESHORTCUT`).
+    ///
+    /// Created by [`NsisInstaller::shortcuts`].
+    ShortcutIter, Shortcut, Shortcut<'a>
 }
 
-impl<'a> ShortcutIter<'a> {
-    pub(crate) fn new(installer: &'a NsisInstaller<'a>, entries: EntryIter<'a>) -> Self {
-        Self { installer, entries }
-    }
-}
-
-impl<'a> Iterator for ShortcutIter<'a> {
-    type Item = Result<Shortcut<'a>, Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let entry = match self.entries.next()? {
-                Ok(e) => e,
-                Err(e) => return Some(Err(e)),
-            };
-            if self.installer.normalize_opcode(entry.which()) == opcode::EW_CREATESHORTCUT {
-                return Some(Ok(Shortcut {
-                    installer: self.installer,
-                    entry,
-                }));
-            }
-        }
-    }
-}
-
-/// Iterator over embedded uninstaller stubs (`EW_WRITEUNINSTALLER` entries).
-///
-/// Created by [`NsisInstaller::uninstallers`].
-pub struct UninstallerIter<'a> {
-    installer: &'a NsisInstaller<'a>,
-    entries: EntryIter<'a>,
-}
-
-impl<'a> UninstallerIter<'a> {
-    pub(crate) fn new(installer: &'a NsisInstaller<'a>, entries: EntryIter<'a>) -> Self {
-        Self { installer, entries }
-    }
-}
-
-impl<'a> Iterator for UninstallerIter<'a> {
-    type Item = Result<Uninstaller<'a>, Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let entry = match self.entries.next()? {
-                Ok(e) => e,
-                Err(e) => return Some(Err(e)),
-            };
-            if self.installer.normalize_opcode(entry.which()) == opcode::EW_WRITEUNINSTALLER {
-                return Some(Ok(Uninstaller {
-                    installer: self.installer,
-                    entry,
-                }));
-            }
-        }
-    }
+instruction_filter! {
+    /// Iterator over embedded uninstaller stubs (`EW_WRITEUNINSTALLER`).
+    ///
+    /// Created by [`NsisInstaller::uninstallers`].
+    UninstallerIter, Uninstaller, Uninstaller<'a>
 }

@@ -23,9 +23,12 @@
 use crate::{
     decompress::{self, CompressionMode},
     error::Error,
-    installer::{NsisInstaller, nsisinstaller::SolidStatus},
+    installer::{
+        NsisInstaller,
+        analysis::{Instruction, InstructionIter},
+        nsisinstaller::SolidStatus,
+    },
     nsis::entry::{Entry, EntryIter},
-    opcode,
     strings::NsisString,
 };
 
@@ -60,6 +63,11 @@ pub struct ExtractedFile<'a> {
 }
 
 impl<'a> ExtractedFile<'a> {
+    /// Builds a view over an `EW_EXTRACTFILE` entry.
+    pub(crate) fn new(installer: &'a NsisInstaller<'a>, entry: Entry<'a>) -> Self {
+        Self { installer, entry }
+    }
+
     /// Returns the file name as a decoded NSIS string.
     ///
     /// The name may contain variable references (e.g., `$INSTDIR\app.exe`).
@@ -250,7 +258,7 @@ impl<'a> ExtractedFile<'a> {
     }
 
     /// Validates that the file length prefix and payload are within the source.
-    fn validate_data_bounds(&self) -> Result<(), Error> {
+    pub(crate) fn validate_data_bounds(&self) -> Result<(), Error> {
         let source = self.data_source();
         let prefix_offset = self.source_offset();
         let prefix_end = prefix_offset.checked_add(4).ok_or(Error::TooShort {
@@ -288,16 +296,13 @@ impl<'a> ExtractedFile<'a> {
 
 /// Iterator over embedded files in an NSIS installer.
 ///
-/// Scans all `EW_EXTRACTFILE` entries in the script and yields an
-/// [`ExtractedFile`] for each one.
-pub struct FileIter<'a> {
-    installer: &'a NsisInstaller<'a>,
-    entries: EntryIter<'a>,
-}
+/// Filters [`InstructionIter`](crate::installer::analysis::InstructionIter)
+/// down to `EW_EXTRACTFILE` entries. Created by [`NsisInstaller::files`].
+pub struct FileIter<'a>(InstructionIter<'a>);
 
 impl<'a> FileIter<'a> {
     pub(crate) fn new(installer: &'a NsisInstaller<'a>, entries: EntryIter<'a>) -> Self {
-        Self { installer, entries }
+        Self(InstructionIter::new(installer, entries))
     }
 }
 
@@ -306,21 +311,9 @@ impl<'a> Iterator for FileIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let entry_result = self.entries.next()?;
-            match entry_result {
-                Ok(entry) => {
-                    if self.installer.normalize_opcode(entry.which()) == opcode::EW_EXTRACTFILE {
-                        let file = ExtractedFile {
-                            installer: self.installer,
-                            entry,
-                        };
-                        if let Err(e) = file.validate_data_bounds() {
-                            return Some(Err(e));
-                        }
-                        return Some(Ok(file));
-                    }
-                    // Skip non-EXTRACTFILE entries.
-                }
+            match self.0.next()? {
+                Ok(Instruction::File(file)) => return Some(Ok(file)),
+                Ok(_) => continue,
                 Err(e) => return Some(Err(e)),
             }
         }
