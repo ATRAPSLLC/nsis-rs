@@ -13,12 +13,39 @@ Built for **malware analysis** and **reverse engineering**.
 - Decompress header blocks (deflate, bzip2, LZMA) in solid and non-solid modes
 - Iterate sections, pages, bytecode entries, language tables, and embedded files
 - Decode NSIS string tables (ANSI, Unicode, Jim Park fork encoding) with variable and shell folder resolution
-- Version-aware opcode lookup across NSIS 1.x, 2.x, 3.x, and the Park Unicode fork
+- Version-aware opcode lookup across every NSIS generation — see below
 - High-level analysis iterators for security-relevant operations:
   plugin calls, process execution, registry modifications, shortcut creation, uninstaller stubs
 - Extract and decompress embedded files
 - Zero-copy view types — the only heap allocations are for decompressed data and decoded strings
 - `#![deny(unsafe_code)]`
+
+## Supported versions
+
+NSIS changed its container format, its instruction numbering and its string
+encoding several times. This crate reads all of them through one interface,
+working out which applies from the file rather than being told:
+
+| Generation | Notes |
+|---|---|
+| **NSIS 1.x** | A different container: no block table, 20-byte sections, 24-byte instructions, its own opcode numbering and one-byte variable references. Its bzip2 keeps a per-block flag NSIS 2.0 dropped, its first-header flags mean different things, and its uninstallers use a shorter header again. |
+| **NSIS 2.x** | Including the variable-layout changes in 2.04 and 2.26, which move the built-in variables and so change what a reference decodes to. |
+| **NSIS 3.x** | ANSI and Unicode targets. NSIS 3 moved the ANSI special codes from the top of the byte range to the bottom. |
+| **Jim Park Unicode fork** | 2.46.1, 2.46.2 and 2.46.3, each inserting instructions at a different point. |
+| **Logging builds** | A makensis compiled with logging carries an extra instruction, shifting everything above `WriteUninstaller`. Detected by which layout the entry stream is consistent with. |
+
+Compression is deflate, bzip2 (both NSIS block layouts) or LZMA, solid or
+non-solid, in any combination the compiler could produce.
+
+Every one of these is covered by a fixture built with the compiler in question
+and checked against 7-Zip's own listing of the same file, in
+`tests/fixture_registry.rs`. The exception is NSIS 1.x, which 7-Zip cannot open
+at all — those fixtures are checked against their build logs instead.
+
+Builds of makensis with a non-default compile-time configuration are a known
+limit: nearly every field in the header and nearly every instruction sits
+behind an `#ifdef`, so a custom build numbers them differently. Files that do
+not read consistently are rejected rather than decoded into plausible nonsense.
 
 ## Quick start
 
