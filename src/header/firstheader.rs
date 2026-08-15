@@ -42,6 +42,24 @@ pub const FH_FLAGS_NO_CRC: u32 = 0x04;
 /// Flag: force CRC even if `/NCRC` was passed.
 pub const FH_FLAGS_FORCE_CRC: u32 = 0x08;
 
+/// NSIS 1.x: the data block is followed by a CRC32.
+///
+/// NSIS 2.0 renumbered these flags. 1.x spends bit 0 on the CRC and has no way
+/// to say a CRC is absent — where 2.x and later spend bit 0 on
+/// [`FH_FLAGS_UNINSTALL`] and bit 2 on [`FH_FLAGS_NO_CRC`]. Reading a 1.x
+/// installer through the later constants reports every CRC-protected one as an
+/// uninstaller, so which set applies depends on the version. See
+/// [`NsisInstaller::is_uninstaller`](crate::NsisInstaller::is_uninstaller).
+///
+/// From `FH_FLAGS_*` in the NSIS 1.98 `Source/exehead/fileform.h`.
+pub const FH_V1_FLAGS_CRC: u32 = 0x01;
+
+/// NSIS 1.x: this is an uninstaller. See [`FH_V1_FLAGS_CRC`].
+pub const FH_V1_FLAGS_UNINSTALL: u32 = 0x02;
+
+/// NSIS 1.x: the installer runs silently. See [`FH_V1_FLAGS_CRC`].
+pub const FH_V1_FLAGS_SILENT: u32 = 0x04;
+
 /// View type for the NSIS FirstHeader (28 bytes).
 ///
 /// This is the first structure found in the PE overlay. It provides the
