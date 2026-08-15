@@ -10,8 +10,10 @@
 //!   with `0x314159265359` (pi) and `0x177245385090` (sqrt(pi)).
 //! - **No per-block CRC32**: standard bzip2 includes a 32-bit CRC after each
 //!   block header; NSIS omits it entirely.
-//! - **No randomised flag**: the 1-bit randomised flag present in standard bzip2
-//!   block headers is absent.
+//! - **Randomised flag**: NSIS 2.x and 3.x drop the 1-bit randomised flag that
+//!   standard bzip2 carries in each block header. NSIS 1.x keeps it, so the two
+//!   generations are the same format one bit apart per block.
+//!   [`decompress_bzip2`] reads whichever one the stream turns out to be.
 //! - **Fixed block size**: hardcoded to 900,000 bytes (equivalent to standard
 //!   bzip2 level 9).
 //!
@@ -248,6 +250,21 @@ struct HuffmanTables {
 // Main decompression (port of BZ2_decompress + BZ2_bzDecompress)
 // ---------------------------------------------------------------------------
 
+/// Where a block's payload starts relative to its header byte.
+///
+/// The two generations of NSIS bzip2 differ by exactly one bit per block.
+/// Nothing in the stream says which one produced it, so [`decompress_bzip2`]
+/// decodes with `Modern` and falls back to `Nsis1` — a stream read under the
+/// wrong layout is misaligned from its origPtr onwards and fails its range
+/// checks almost immediately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockLayout {
+    /// NSIS 2.x and 3.x: the block header byte is followed by origPtr.
+    Modern,
+    /// NSIS 1.x: standard bzip2's 1-bit randomised flag precedes origPtr.
+    Nsis1,
+}
+
 /// Decompresses an NSIS bzip2 stream.
 ///
 /// NSIS bzip2 differs from standard bzip2: there is no `"BZh"` stream header,
@@ -270,19 +287,38 @@ struct HuffmanTables {
 /// A [`Decoded`] whose [`truncated`](Decoded::truncated) flag reports whether
 /// the budget cut the output short.
 pub fn decompress_bzip2(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded, Error> {
+    match decompress_bzip2_layout(compressed, limit, BlockLayout::Modern) {
+        Ok(decoded) => Ok(decoded),
+        // Report the modern layout's error when neither works: every NSIS
+        // release since 2.0 writes that one, so it is the likelier diagnosis.
+        Err(modern) => {
+            decompress_bzip2_layout(compressed, limit, BlockLayout::Nsis1).map_err(|_| modern)
+        }
+    }
+}
+
+fn decompress_bzip2_layout(
+    compressed: &[u8],
+    limit: DecodeLimit,
+    layout: BlockLayout,
+) -> Result<Decoded, Error> {
     // Run the decoder under `catch_unwind` so any out-of-bounds index or
     // arithmetic overflow inside the vendored algorithm surfaces as a clean
     // `DecompressionFailed` error rather than aborting the calling worker.
     // See the module-level "Lint allowlist" doc for context.
     match panic::catch_unwind(AssertUnwindSafe(|| {
-        decompress_bzip2_inner(compressed, limit)
+        decompress_bzip2_inner(compressed, limit, layout)
     })) {
         Ok(result) => result,
         Err(_) => Err(fail("decoder panicked on malformed input")),
     }
 }
 
-fn decompress_bzip2_inner(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded, Error> {
+fn decompress_bzip2_inner(
+    compressed: &[u8],
+    limit: DecodeLimit,
+    layout: BlockLayout,
+) -> Result<Decoded, Error> {
     if compressed.is_empty() {
         return Err(fail("empty input"));
     }
@@ -314,7 +350,7 @@ fn decompress_bzip2_inner(compressed: &[u8], limit: DecodeLimit) -> Result<Decod
 
         // Decompress one block and append its output (capped at `ceiling`).
         // The flag reports whether the block stopped early on that cap.
-        let stopped_at_cap = decompress_block(&mut reader, &mut output, ceiling)?;
+        let stopped_at_cap = decompress_block(&mut reader, &mut output, ceiling, layout)?;
 
         if output.len() >= ceiling {
             match limit {
@@ -353,7 +389,17 @@ fn decompress_block(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
     max_output: usize,
+    layout: BlockLayout,
 ) -> Result<bool, Error> {
+    if layout == BlockLayout::Nsis1 {
+        // Standard bzip2's randomised flag, which NSIS 1.x kept. It selects a
+        // de-randomising pass that bzip2 itself stopped emitting in 0.9.5, so
+        // no NSIS installer sets it; refuse rather than decode it wrongly.
+        if reader.get_bit()? == 1 {
+            return Err(fail("randomised blocks are not supported"));
+        }
+    }
+
     // --- Read origPtr (3 bytes, big-endian) ---
     let b0 = reader.get_u8()?;
     let b1 = reader.get_u8()?;
