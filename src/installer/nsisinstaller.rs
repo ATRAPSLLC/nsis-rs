@@ -15,6 +15,7 @@ use crate::{
             FH_FLAGS_SILENT, FH_FLAGS_UNINSTALL, FH_V1_FLAGS_CRC, FH_V1_FLAGS_SILENT,
             FH_V1_FLAGS_UNINSTALL, FirstHeader,
         },
+        v1header::V1HeaderKind,
     },
     installer::{
         analysis::{
@@ -212,6 +213,9 @@ pub struct NsisInstaller<'a> {
     section_size: usize,
     /// String offsets from the tail of the common header.
     header_strings: HeaderStrings,
+    /// Offset of the uninstaller data within the data block, or `None` for a
+    /// version that records it on the `WriteUninstaller` instruction instead.
+    v1_uninstall_data_offset: Option<i32>,
     /// Callback entry indices from the common header.
     ///
     /// Order: onInit, onInstSuccess, onInstFailed, onUserAbort, onGUIInit,
@@ -346,6 +350,9 @@ impl<'a> NsisInstaller<'a> {
         // has to be worked out from whether the header reads consistently
         // under it. The modern layout is tried first: every NSIS since 2.0
         // writes it, and a 1.x header fails its block-offset checks.
+        // NSIS 1.x keeps this on the header, where later versions keep it on
+        // the instruction; it is picked up below if this turns out to be one.
+        let mut v1_uninstall_data_offset = None;
         let (blocks, common_flags, langtable_size, callbacks, header_strings, is_v1) =
             match CommonHeader::parse(&header_data) {
                 Ok(common_header) => {
@@ -387,7 +394,15 @@ impl<'a> NsisInstaller<'a> {
                 // Report the modern layout's error if this is not a 1.x header
                 // either: that is far more often the real diagnosis.
                 Err(modern) => {
-                    let v1 = V1Header::parse(&header_data).map_err(|_| modern)?;
+                    // 1.x writes a different struct for an uninstaller, and
+                    // the FirstHeader flag says which — with 1.x's numbering,
+                    // where bit 1 rather than bit 0 carries it.
+                    let kind = if first_header.flags() & FH_V1_FLAGS_UNINSTALL != 0 {
+                        V1HeaderKind::Uninstaller
+                    } else {
+                        V1HeaderKind::Installer
+                    };
+                    let v1 = V1Header::parse(&header_data, kind).map_err(|_| modern)?;
                     let v1_callbacks = v1.callbacks();
                     let callback_at = |i: usize| v1_callbacks.get(i).copied().unwrap_or(-1);
                     let callbacks = [
@@ -416,6 +431,7 @@ impl<'a> NsisInstaller<'a> {
                         uninstall_command: -1,
                         wininit: -1,
                     };
+                    v1_uninstall_data_offset = Some(v1.uninstall_data_offset());
                     (v1.block_layout(), 0, 0, callbacks, header_strings, true)
                 }
             };
@@ -605,6 +621,7 @@ impl<'a> NsisInstaller<'a> {
             common_flags,
             langtable_size,
             header_strings,
+            v1_uninstall_data_offset,
             section_size,
             callbacks,
             park_sub,
@@ -1355,6 +1372,16 @@ impl<'a> NsisInstaller<'a> {
             }
         }
         offset.to_string()
+    }
+
+    /// Returns where NSIS 1.x records its uninstaller data, if this is one.
+    ///
+    /// 1.x `WriteUninstaller` takes only a name; the offset of the uninstaller
+    /// data within the data block is a header field. Later versions moved it
+    /// onto the instruction, so this is `None` for them.
+    #[inline]
+    pub(crate) fn v1_uninstall_data_offset(&self) -> Option<i32> {
+        self.v1_uninstall_data_offset
     }
 
     /// Returns the data block offset within the original file (non-solid only).

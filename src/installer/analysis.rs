@@ -568,11 +568,22 @@ impl<'a> Uninstaller<'a> {
 
     /// Returns the byte offset of the uninstaller stub within the data block.
     pub fn data_offset(&self) -> i32 {
+        // NSIS 1.x `WriteUninstaller` takes only a name and keeps this on the
+        // header. Read as a 1.x instruction, the modern slot is an operand
+        // that does not exist and reads as 0 — the start of the data block.
+        if let Some(offset) = self.installer.v1_uninstall_data_offset() {
+            return offset;
+        }
         self.entry.offset(1)
     }
 
     /// Returns the icon/patch size in bytes.
     pub fn icon_size(&self) -> i32 {
+        // 1.x does not record one on the instruction. The icon data is still
+        // length-prefixed in the stream, which is what `data()` reads.
+        if self.installer.v1_uninstall_data_offset().is_some() {
+            return 0;
+        }
         self.entry.offset(2)
     }
 

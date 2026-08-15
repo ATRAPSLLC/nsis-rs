@@ -430,6 +430,41 @@ const FIXTURES: &[Fixture] = &[
         // installer as 1 section and 3 instructions.
         ground_truth: GroundTruth::BuildLog(&[("payload.txt", 54)]),
     },
+    Fixture {
+        name: "nsis1x_bzip2",
+        // 1.98 chooses its compressor when makensis is built, not per script,
+        // so the distribution ships a second binary for bzip2. Its /HDRINFO
+        // reports NSIS_COMPRESS_USE_BZIP2 and NSIS_COMPRESS_WHOLE, which is
+        // why this one is solid where the zlib build's output is not.
+        compiler: "makensis-bz2 1.98",
+        version: NsisVersion::V1,
+        nsis2_sub: None,
+        encoding: StringEncoding::Ansi,
+        method: CompressionMethod::Bzip2,
+        mode: CompressionMode::Solid,
+        files: 1,
+        uninstallers: 0,
+        budget: DEFAULT_BUDGET,
+        version_defect: None,
+        name_defect: None,
+        ground_truth: GroundTruth::BuildLog(&[("payload.txt", 54)]),
+    },
+    Fixture {
+        name: "nsis1x_uninst",
+        compiler: "makensis 1.98",
+        version: NsisVersion::V1,
+        nsis2_sub: None,
+        encoding: StringEncoding::Ansi,
+        method: CompressionMethod::Deflate,
+        mode: CompressionMode::NonSolid,
+        files: 2,
+        uninstallers: 1,
+        budget: DEFAULT_BUDGET,
+        version_defect: None,
+        name_defect: None,
+        // The build log reports 2 sections, 7 instructions and both files.
+        ground_truth: GroundTruth::BuildLog(&[("docs\\config.ini", 23), ("payload.txt", 54)]),
+    },
     // -- Payload larger than the default budget --
     Fixture {
         name: "oversize_lzma_solid",

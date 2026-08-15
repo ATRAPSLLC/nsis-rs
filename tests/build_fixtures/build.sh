@@ -22,6 +22,10 @@
 #   PARK_2463  NSIS 2.46.3-Unicode
 #   NSIS_198   NSIS 1.98 (the last 1.x release)
 #
+# NSIS 1.98 chooses its compressor when makensis is built rather than per
+# script, so its distribution ships a second binary for bzip2. Fixtures that
+# need it name the executable rather than just the directory.
+#
 # Usage:  ./build.sh [fixture ...]     (no arguments rebuilds everything)
 
 set -euo pipefail
@@ -46,6 +50,16 @@ LOCAL_OUT="../fixtures"
 LOG_DIR="logs"
 
 # Which compiler builds which fixture. Anything unlisted uses NSIS 3.10.
+# Which executable in that directory compiles a fixture. NSIS 1.98's bzip2
+# build is a separate binary beside the zlib one, and produces solid output —
+# its /HDRINFO reports NSIS_COMPRESS_USE_BZIP2 and NSIS_COMPRESS_WHOLE.
+compiler_exe_for() {
+    case "$1" in
+        nsis1x_bzip2) echo "makensis-bz2.exe" ;;
+        *)            echo "makensis.exe" ;;
+    esac
+}
+
 compiler_for() {
     case "$1" in
         nsis246_ansi_solid|nsis246_ansi_latin1|dirs_nsis246_ansi_solid) echo "$NSIS_246" ;;
@@ -55,7 +69,7 @@ compiler_for() {
         park2_unicode) echo "$PARK_2462" ;;
         park3_unicode) echo "$PARK_2463" ;;
         opcodes_logbuild) echo "$NSIS_310L" ;;
-        nsis1x)        echo "$NSIS_198" ;;
+        nsis1x|nsis1x_uninst|nsis1x_bzip2) echo "$NSIS_198" ;;
         *)             echo "$NSIS_310" ;;
     esac
 }
@@ -91,8 +105,10 @@ for name in "${targets[@]}"; do
         continue
     fi
 
+    compiler_exe="$(compiler_exe_for "$name")"
+
     echo "  Building $name..."
-    if "${SSH[@]}" "cd /d $REMOTE_DIR && \"${compiler}\\makensis.exe\" /V4 ${name}.nsi" \
+    if "${SSH[@]}" "cd /d $REMOTE_DIR && \"${compiler}\\${compiler_exe}\" /V4 ${name}.nsi" \
         > "${LOG_DIR}/${name}.log" 2>&1; then
         scp "${SCP_PORT[@]}" -q "${NSIS_BUILD_HOST}:${REMOTE_DIR}\\${name}.exe" "${LOCAL_OUT}/${name}.exe"
     else

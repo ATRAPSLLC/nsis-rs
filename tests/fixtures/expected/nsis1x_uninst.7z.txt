@@ -1,0 +1,16 @@
+
+7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
+
+Scanning the drive for archives:
+1 file, 37490 bytes (37 KiB)
+
+Listing archive: nsis1x_uninst.exe
+
+
+Errors: 1
+
+ERROR: nsis1x_uninst.exe : nsis1x_uninst.exe
+Open ERROR: Cannot open the file as [Nsis] archive
+
+
+
