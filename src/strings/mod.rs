@@ -473,47 +473,106 @@ pub fn read_nsis_string(
     }
 }
 
-/// Reads a string from a header block's string table by TCHAR offset.
+/// An installer's string table, and everything needed to decode from it.
 ///
-/// String references inside NSIS structures — section `name_ptr` fields, entry
-/// parameter slots — are TCHAR indices rather than byte offsets, so the offset
-/// is scaled by the encoding's character size before reading. A negative offset
-/// is not a reference at all and yields an empty string.
+/// Decoding a string is not a pure function of its bytes. The character size
+/// and the special-code range depend on the encoding and the NSIS version; the
+/// names of variables depend on which variable layout the compiler used; and a
+/// registry-backed shell folder is a *reference to another string in the same
+/// table*, so the decoder has to be able to read the table it is decoding from.
+/// This type carries all of it.
 ///
-/// # Arguments
-///
-/// - `header_data`: the decompressed header block
-/// - `string_block_offset`: byte offset of the string table within it
-/// - `encoding`: the table's encoding
-/// - `offset`: TCHAR index of the string to read
-///
-/// # Errors
-///
-/// Returns [`Error::InvalidStringOffset`] if the offset lies beyond the table.
-pub fn read_string_at(
-    header_data: &[u8],
-    string_block_offset: usize,
+/// Obtain one from
+/// [`NsisInstaller::string_table`](crate::installer::NsisInstaller::string_table),
+/// which builds it from the detected encoding, version and variable layout.
+#[derive(Debug, Clone, Copy)]
+pub struct StringTable<'a> {
+    /// The decompressed header block.
+    data: &'a [u8],
+    /// Byte offset of the string table within `data`.
+    base: usize,
     encoding: StringEncoding,
-    codes: AnsiCodeRange,
-    offset: i32,
-) -> Result<NsisString, Error> {
-    if offset < 0 {
-        return Ok(NsisString {
-            segments: Vec::new(),
-        });
-    }
-    // Both Unicode and Park are UTF-16LE, so their TCHAR is 2 bytes.
-    let char_size = match encoding {
-        StringEncoding::Unicode | StringEncoding::Park => 2,
-        StringEncoding::Ansi => 1,
-    };
-    let abs_offset =
-        string_block_offset.saturating_add((offset as usize).saturating_mul(char_size));
-    read_nsis_string(header_data, abs_offset, encoding, codes)
+    ansi_codes: AnsiCodeRange,
+    /// Number of built-in variables in this installer's layout.
+    internal_vars: u16,
 }
 
-/// Number of built-in (internal) NSIS variables.
-const NUM_INTERNAL_VARS: u16 = 32;
+impl<'a> StringTable<'a> {
+    /// Creates a string table view over a decompressed header block.
+    ///
+    /// `base` is the byte offset of the string block within `data`, and
+    /// `internal_vars` the number of built-in variables in the installer's
+    /// layout — [`Nsis2SubVersion::internal_var_count`] for an NSIS 2
+    /// installer, [`DEFAULT_INTERNAL_VARS`] otherwise.
+    ///
+    /// [`Nsis2SubVersion::internal_var_count`]: crate::opcode::Nsis2SubVersion::internal_var_count
+    pub fn new(
+        data: &'a [u8],
+        base: usize,
+        encoding: StringEncoding,
+        ansi_codes: AnsiCodeRange,
+        internal_vars: u16,
+    ) -> Self {
+        Self {
+            data,
+            base,
+            encoding,
+            ansi_codes,
+            internal_vars,
+        }
+    }
+
+    /// Returns the encoding this table is stored in.
+    #[inline]
+    pub fn encoding(&self) -> StringEncoding {
+        self.encoding
+    }
+
+    /// Returns the number of built-in variables in this installer's layout.
+    #[inline]
+    pub fn internal_vars(&self) -> u16 {
+        self.internal_vars
+    }
+
+    /// Returns the number of bytes per character in this table.
+    #[inline]
+    pub fn char_size(&self) -> usize {
+        // Both Unicode and Park are UTF-16LE.
+        match self.encoding {
+            StringEncoding::Unicode | StringEncoding::Park => 2,
+            StringEncoding::Ansi => 1,
+        }
+    }
+
+    /// Reads the string at a TCHAR offset.
+    ///
+    /// String references inside NSIS structures — section `name_ptr` fields,
+    /// entry parameter slots — are character indices rather than byte offsets,
+    /// so the offset is scaled by [`char_size`](Self::char_size). A negative
+    /// offset is not a reference at all and yields an empty string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidStringOffset`] if the offset lies beyond the
+    /// table.
+    pub fn read(&self, offset: i32) -> Result<NsisString, Error> {
+        if offset < 0 {
+            return Ok(NsisString {
+                segments: Vec::new(),
+            });
+        }
+        let byte_offset = self
+            .base
+            .saturating_add((offset as usize).saturating_mul(self.char_size()));
+        read_nsis_string(self.data, byte_offset, self.encoding, self.ansi_codes)
+    }
+}
+
+/// Number of built-in variables in NSIS 2.26 and later, which NSIS 3 inherited.
+///
+/// Earlier NSIS 2 layouts have fewer; see
+/// [`Nsis2SubVersion::internal_var_count`](crate::opcode::Nsis2SubVersion::internal_var_count).
+pub const DEFAULT_INTERNAL_VARS: u16 = 32;
 
 /// Built-in variable names indexed by variable number.
 ///
@@ -564,7 +623,10 @@ pub fn variable_name(index: u16) -> Cow<'static, str> {
     if let Some(name) = VARIABLE_NAMES.get(index as usize) {
         Cow::Borrowed(name)
     } else {
-        Cow::Owned(format!("$_{}_", index.saturating_sub(NUM_INTERNAL_VARS)))
+        Cow::Owned(format!(
+            "$_{}_",
+            index.saturating_sub(DEFAULT_INTERNAL_VARS)
+        ))
     }
 }
 
