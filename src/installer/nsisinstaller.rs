@@ -75,12 +75,7 @@ pub enum SolidStatus {
 /// The check is 7-Zip's: an opcode that takes fewer parameters than the entry
 /// passes cannot be the right reading. An installer that uses no opcode above
 /// the boundary is consistent with both, and reads identically either way.
-fn detect_log_build(
-    header_data: &[u8],
-    entry_block_offset: usize,
-    entry_count: usize,
-    version: NsisVersion,
-) -> bool {
+fn detect_log_build(header_data: &[u8], entry_block_offset: usize, entry_count: usize) -> bool {
     // The two layouts agree below `EW_SECTIONSET`, so an installer that never
     // reaches that far reads identically either way and needs no scan at all.
     // That covers most scripts.
@@ -88,15 +83,14 @@ fn detect_log_build(
         return false;
     }
 
-    let standard = opcode::find_bad_opcode(header_data, entry_block_offset, entry_count, |raw| {
-        opcode::lookup(version, raw)
-    });
+    let standard =
+        opcode::find_bad_opcode(header_data, entry_block_offset, entry_count, opcode::lookup);
     if standard.is_none() {
         return false;
     }
 
     let with_log = opcode::find_bad_opcode(header_data, entry_block_offset, entry_count, |raw| {
-        opcode::lookup(version, opcode::normalize_log_opcode(raw))
+        opcode::lookup(opcode::normalize_log_opcode(raw))
     });
     with_log.is_none()
 }
@@ -430,8 +424,8 @@ impl<'a> NsisInstaller<'a> {
         // in the header says which build produced the file, so both layouts
         // are read and the one the entry block is consistent with wins. Park
         // has its own insertions and is normalised separately.
-        let log_build = version != NsisVersion::Park
-            && detect_log_build(&header_data, ent_offset, ent_count, version);
+        let log_build =
+            version != NsisVersion::Park && detect_log_build(&header_data, ent_offset, ent_count);
 
         // Step 5d: NSIS 2 moved its built-in variables around, so an ANSI
         // NSIS-2 installer needs its variable layout pinned down before any
@@ -905,7 +899,7 @@ impl<'a> NsisInstaller<'a> {
         if which < 0 {
             return None;
         }
-        opcode::lookup(self.version, self.normalize_opcode(which) as u32)
+        opcode::lookup(self.normalize_opcode(which) as u32)
     }
 
     /// Formats an entry as a single script-like line.
