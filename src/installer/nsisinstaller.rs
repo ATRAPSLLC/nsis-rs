@@ -1,5 +1,8 @@
 //! The main NSIS installer parser entry point.
 
+use core::fmt::Write as _;
+use std::sync::OnceLock;
+
 use crate::{
     addressmap::PeOverlay,
     decompress::{self, CompressionMethod, CompressionMode, DecodeLimit},
@@ -217,6 +220,13 @@ pub struct NsisInstaller<'a> {
     nsis2_sub: Option<Nsis2SubVersion>,
     /// Whether the compiler was built with logging, which shifts opcodes.
     log_build: bool,
+    /// Control-flow analysis, built on first use.
+    ///
+    /// Walking the whole entry stream to build it is not cheap, and callers
+    /// reasonably ask for it more than once — the formatters take it as an
+    /// argument, so a caller holding an installer but not the analysis would
+    /// otherwise pay for it again.
+    analysis: OnceLock<ScriptAnalysis>,
     /// Maximum decompressed size budget for unknown-size streams.
     ///
     /// Applied per decompression call to embedded files, the solid file-data
@@ -540,6 +550,7 @@ impl<'a> NsisInstaller<'a> {
             park_sub,
             nsis2_sub,
             log_build,
+            analysis: OnceLock::new(),
             max_decompressed_size,
         })
     }
@@ -924,15 +935,43 @@ impl<'a> NsisInstaller<'a> {
     /// }
     /// ```
     pub fn format_entry(&self, entry: &Entry<'_>) -> String {
+        let mut out = String::new();
+        self.write_entry(&mut out, entry);
+        out
+    }
+
+    /// Renders an entry into `out`, as [`format_entry`](Self::format_entry).
+    ///
+    /// Disassembling a whole script means one line per entry, and an installer
+    /// can hold tens of thousands. This lets a caller reuse one buffer for all
+    /// of them instead of allocating a `String` per line. Existing contents of
+    /// `out` are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let bytes = std::fs::read("installer.exe").unwrap();
+    /// # let installer = nsis::NsisInstaller::from_bytes(&bytes).unwrap();
+    /// let mut line = String::new();
+    /// for entry in installer.entries() {
+    ///     line.clear();
+    ///     installer.write_entry(&mut line, &entry.unwrap());
+    ///     println!("{line}");
+    /// }
+    /// ```
+    pub fn write_entry(&self, out: &mut String, entry: &Entry<'_>) {
         let mnemonic = self
             .resolve_opcode(entry.which())
             .map(|info| info.mnemonic)
             .unwrap_or("???");
-        let params = self.format_entry_params(entry);
-        if params.is_empty() {
-            mnemonic.to_string()
-        } else {
-            format!("{mnemonic} {params}")
+        out.push_str(mnemonic);
+
+        let start = out.len();
+        self.write_entry_params(out, entry);
+        if out.len() > start {
+            // Separate the operands from the mnemonic now that we know there
+            // are some.
+            out.insert(start, ' ');
         }
     }
 
@@ -951,21 +990,34 @@ impl<'a> NsisInstaller<'a> {
     /// A comma-separated operand string without the opcode mnemonic. Returns an
     /// empty string for opcodes with no meaningful operands.
     pub fn format_entry_params(&self, entry: &Entry<'_>) -> String {
+        let mut out = String::new();
+        self.write_entry_params(&mut out, entry);
+        out
+    }
+
+    /// Renders an entry's operands into `out`, as
+    /// [`format_entry_params`](Self::format_entry_params).
+    ///
+    /// Writes directly into the caller's buffer, for rendering many entries
+    /// without a `String` per line. Existing contents of `out` are kept.
+    pub fn write_entry_params(&self, out: &mut String, entry: &Entry<'_>) {
         let Some(info) = self.resolve_opcode(entry.which()) else {
-            return format!("which={}", entry.which());
+            let _ = write!(out, "which={}", entry.which());
+            return;
         };
 
         if entry.which() == opcode::EW_PUSHPOP {
-            return self.format_pushpop_params(entry);
+            out.push_str(&self.format_pushpop_params(entry));
+            return;
         }
 
         let offsets = entry.offsets();
         let count = info.param_count as usize;
         if count == 0 {
-            return String::new();
+            return;
         }
 
-        let mut parts = Vec::new();
+        let mut written = 0usize;
         for (i, ((&val, &name), &ptype)) in offsets
             .iter()
             .zip(info.param_names.iter())
@@ -980,32 +1032,41 @@ impl<'a> NsisInstaller<'a> {
             if name.is_empty() && val == 0 {
                 continue;
             }
+
+            // Whether this operand prints at all is decided per type, so the
+            // separator is only added once something is actually written.
+            let separate = |out: &mut String, written: &mut usize| {
+                if *written > 0 {
+                    out.push_str(", ");
+                }
+                *written = written.saturating_add(1);
+            };
+
             match ptype {
-                ParamType::String => parts.push(format_param(name, self.format_string_param(val))),
+                ParamType::String => {
+                    separate(out, &mut written);
+                    write_named(out, name, &self.format_string_param(val));
+                }
                 ParamType::Variable => {
-                    parts.push(format_param(
-                        name,
-                        format_variable_param(&self.string_table(), val),
-                    ));
+                    separate(out, &mut written);
+                    write_named(out, name, &format_variable_param(&self.string_table(), val));
                 }
                 ParamType::Jump => {
                     if val != 0 {
-                        if name.is_empty() {
-                            parts.push(format!("=>{val}"));
-                        } else {
-                            parts.push(format!("{name}=>{val}"));
-                        }
+                        separate(out, &mut written);
+                        out.push_str(name);
+                        let _ = write!(out, "=>{val}");
                     }
                 }
                 ParamType::Int => {
                     if val != 0 || i < count.min(2) {
-                        parts.push(format_param(name, val.to_string()));
+                        separate(out, &mut written);
+                        write_named(out, name, &val.to_string());
                     }
                 }
                 ParamType::Unused => {}
             }
         }
-        parts.join(", ")
     }
 
     /// Formats an entry as a single script-like line with analysis symbols.
@@ -1072,21 +1133,39 @@ impl<'a> NsisInstaller<'a> {
         entry: &Entry<'_>,
         analysis: &ScriptAnalysis,
     ) -> String {
+        let mut out = String::new();
+        self.write_entry_params_with_analysis(&mut out, entry, analysis);
+        out
+    }
+
+    /// Renders an entry's operands with analysis symbols into `out`, as
+    /// [`format_entry_params_with_analysis`](Self::format_entry_params_with_analysis).
+    ///
+    /// Writes directly into the caller's buffer, for rendering many entries
+    /// without a `String` per line. Existing contents of `out` are kept.
+    pub fn write_entry_params_with_analysis(
+        &self,
+        out: &mut String,
+        entry: &Entry<'_>,
+        analysis: &ScriptAnalysis,
+    ) {
         let Some(info) = self.resolve_opcode(entry.which()) else {
-            return format!("which={}", entry.which());
+            let _ = write!(out, "which={}", entry.which());
+            return;
         };
 
         if entry.which() == opcode::EW_PUSHPOP {
-            return self.format_pushpop_params(entry);
+            out.push_str(&self.format_pushpop_params(entry));
+            return;
         }
 
         let offsets = entry.offsets();
         let count = info.param_count as usize;
         if count == 0 {
-            return String::new();
+            return;
         }
 
-        let mut parts = Vec::new();
+        let mut written = 0usize;
         for (i, ((&val, &name), &ptype)) in offsets
             .iter()
             .zip(info.param_names.iter())
@@ -1094,24 +1173,29 @@ impl<'a> NsisInstaller<'a> {
             .take(count)
             .enumerate()
         {
-            // Parameter counts are the maximum an opcode has taken across NSIS
-            // versions, so an instruction compiled by a modern makensis leaves
-            // the extra slots unused. Show a slot this crate has no name for
-            // only when it actually carries something.
             if name.is_empty() && val == 0 {
                 continue;
             }
+            let separate = |out: &mut String, written: &mut usize| {
+                if *written > 0 {
+                    out.push_str(", ");
+                }
+                *written = written.saturating_add(1);
+            };
+
             match ptype {
-                ParamType::String => parts.push(format_param(name, self.format_string_param(val))),
+                ParamType::String => {
+                    separate(out, &mut written);
+                    write_named(out, name, &self.format_string_param(val));
+                }
                 ParamType::Variable => {
-                    parts.push(format_param(
-                        name,
-                        format_variable_param(&self.string_table(), val),
-                    ));
+                    separate(out, &mut written);
+                    write_named(out, name, &format_variable_param(&self.string_table(), val));
                 }
                 ParamType::Jump => {
                     if val != 0 {
-                        parts.push(format_symbolic_jump_param(
+                        separate(out, &mut written);
+                        out.push_str(&format_symbolic_jump_param(
                             &self.string_table(),
                             name,
                             val,
@@ -1121,13 +1205,13 @@ impl<'a> NsisInstaller<'a> {
                 }
                 ParamType::Int => {
                     if val != 0 || i < count.min(2) {
-                        parts.push(format_param(name, val.to_string()));
+                        separate(out, &mut written);
+                        write_named(out, name, &val.to_string());
                     }
                 }
                 ParamType::Unused => {}
             }
         }
-        parts.join(", ")
     }
 
     /// Builds a script-level control-flow analysis.
@@ -1156,8 +1240,15 @@ impl<'a> NsisInstaller<'a> {
     ///     println!("{:?} -> {:?}", edge.kind, edge.target);
     /// }
     /// ```
-    pub fn script_analysis(&self) -> Result<ScriptAnalysis, Error> {
-        script::analyze(self)
+    pub fn script_analysis(&self) -> Result<&ScriptAnalysis, Error> {
+        if let Some(analysis) = self.analysis.get() {
+            return Ok(analysis);
+        }
+        let analysis = script::analyze(self)?;
+        // Two callers racing here both compute; the first to finish wins and
+        // the other's copy is dropped. The analysis is a pure function of the
+        // installer, so either is correct.
+        Ok(self.analysis.get_or_init(|| analysis))
     }
 
     fn format_pushpop_params(&self, entry: &Entry<'_>) -> String {
@@ -1459,12 +1550,13 @@ impl<'a> NsisInstallerBuilder<'a> {
     }
 }
 
-fn format_param(name: &str, value: String) -> String {
-    if name.is_empty() {
-        value
-    } else {
-        format!("{name}={value}")
+/// Appends `name=value`, or just the value for an unnamed operand.
+fn write_named(out: &mut String, name: &str, value: &str) {
+    if !name.is_empty() {
+        out.push_str(name);
+        out.push('=');
     }
+    out.push_str(value);
 }
 
 fn format_variable_param(table: &StringTable<'_>, index: i32) -> String {
