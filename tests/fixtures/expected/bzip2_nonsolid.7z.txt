@@ -1,0 +1,38 @@
+
+7-Zip 25.01 (x64) : Copyright (c) 1999-2025 Igor Pavlov : 2025-08-03
+ 64-bit locale=en_US.UTF-8 Threads:56 OPEN_MAX:524288, ASM
+
+Scanning the drive for archives:
+1 file, 38224 bytes (38 KiB)
+
+Listing archive: bzip2_nonsolid.exe
+
+--
+Path = bzip2_nonsolid.exe
+Type = Nsis
+Physical Size = 38224
+Method = BZip2
+Solid = -
+Headers Size = 3980
+Embedded Stub Size = 37376
+SubType = NSIS-3 Unicode
+
+----------
+Path = payload.txt
+Size = 55
+Packed Size = 55
+Modified = 2026-04-05 08:24:44.0000000
+Attributes = 
+Method = Copy
+Solid = -
+Offset = 0
+
+Path = config.ini
+Size = 26
+Packed Size = 26
+Modified = 2026-04-05 08:24:44.0000000
+Attributes = 
+Method = Copy
+Solid = -
+Offset = 59
+

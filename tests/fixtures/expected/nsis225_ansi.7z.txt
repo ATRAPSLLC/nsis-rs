@@ -1,0 +1,37 @@
+
+7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
+
+Scanning the drive for archives:
+1 file, 32982 bytes (33 KiB)
+
+Listing archive: nsis225_ansi.exe
+
+--
+Path = nsis225_ansi.exe
+Type = Nsis
+Physical Size = 32982
+Method = Deflate
+Solid = -
+Headers Size = 2338
+Embedded Stub Size = 32256
+SubType = NSIS-2
+
+----------
+Path = payload.txt
+Size = 53
+Packed Size = 53
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = Copy
+Solid = -
+Offset = 0
+
+Path = docs\config.ini
+Size = 23
+Packed Size = 23
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = Copy
+Solid = -
+Offset = 57
+

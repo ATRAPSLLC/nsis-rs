@@ -1,1 +1,4 @@
 target/
+
+# Fixture build logs: makensis records absolute paths from the build machine.
+tests/build_fixtures/logs/

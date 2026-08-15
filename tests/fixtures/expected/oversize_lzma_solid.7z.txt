@@ -1,0 +1,46 @@
+
+7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
+
+Scanning the drive for archives:
+1 file, 48878 bytes (48 KiB)
+
+Listing archive: oversize_lzma_solid.exe
+
+--
+Path = oversize_lzma_solid.exe
+Type = Nsis
+Physical Size = 48878
+Method = LZMA:23
+Solid = +
+Headers Size = 4018
+Embedded Stub Size = 37376
+SubType = NSIS-3 Unicode
+
+----------
+Path = payload.txt
+Size = 53
+Packed Size = 11498
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 0
+
+Path = big.bin
+Size = 75497472
+Packed Size = 
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 57
+
+Path = config.ini
+Size = 
+Packed Size = 
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 75497533
+

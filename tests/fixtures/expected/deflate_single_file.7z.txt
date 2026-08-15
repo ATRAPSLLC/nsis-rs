@@ -1,0 +1,29 @@
+
+7-Zip 25.01 (x64) : Copyright (c) 1999-2025 Igor Pavlov : 2025-08-03
+ 64-bit locale=en_US.UTF-8 Threads:56 OPEN_MAX:524288, ASM
+
+Scanning the drive for archives:
+1 file, 39225 bytes (39 KiB)
+
+Listing archive: deflate_single_file.exe
+
+--
+Path = deflate_single_file.exe
+Type = Nsis
+Physical Size = 39225
+Method = Deflate
+Solid = -
+Headers Size = 3926
+Embedded Stub Size = 38400
+SubType = NSIS-3 Unicode
+
+----------
+Path = payload.txt
+Size = 55
+Packed Size = 55
+Modified = 2026-04-05 06:34:22.0000000
+Attributes = 
+Method = Copy
+Solid = -
+Offset = 0
+

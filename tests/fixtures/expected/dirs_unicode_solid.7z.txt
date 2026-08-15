@@ -1,0 +1,91 @@
+
+7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
+
+Scanning the drive for archives:
+1 file, 38266 bytes (38 KiB)
+
+Listing archive: dirs_unicode_solid.exe
+
+--
+Path = dirs_unicode_solid.exe
+Type = Nsis
+Physical Size = 38266
+Method = LZMA:23
+Solid = +
+Headers Size = 4588
+Embedded Stub Size = 37376
+SubType = NSIS-3 Unicode
+
+----------
+Path = last.txt
+Size = 53
+Packed Size = 886
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 0
+
+Path = payload.txt
+Size = 53
+Packed Size = 
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 0
+
+Path = after\after.txt
+Size = 53
+Packed Size = 
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 0
+
+Path = $PLUGINSDIR\app-64.7z
+Size = 53
+Packed Size = 
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 0
+
+Path = Lang\de_DE.ini
+Size = 
+Packed Size = 
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 57
+
+Path = Lang\en_US.ini
+Size = 
+Packed Size = 
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 57
+
+Path = Lang\regional\de_AT.ini
+Size = 
+Packed Size = 
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 57
+
+Path = Lang\regional\extra\nested.ini
+Size = 
+Packed Size = 
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 57
+

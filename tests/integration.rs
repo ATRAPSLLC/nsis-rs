@@ -11,7 +11,7 @@
     clippy::indexing_slicing
 )]
 
-use nsis::{Error, NsisInstaller, SolidStatus};
+use nsis::{Error, NsisInstaller, SolidStatus, header::firstheader::FirstHeader};
 
 fn fixture_bytes(name: &str) -> &'static [u8] {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -659,8 +659,6 @@ fn truncated_solid_decompress_reports_the_budget() {
 /// Copies a fixture and corrupts the tail of its solid stream, leaving the
 /// header region — which decodes with an exact bound and stops early — intact.
 fn fixture_with_corrupt_solid_tail(name: &str) -> Vec<u8> {
-    use nsis::header::firstheader::FirstHeader;
-
     let mut data = fixture_bytes(name).to_vec();
     let inst = parse_fixture(name);
     let fh_offset = inst.first_header_file_offset();
@@ -711,6 +709,90 @@ fn failed_solid_decode_is_reported_not_swallowed() {
 }
 
 #[test]
+fn stubs_rejected_by_strict_pe_parsing_still_parse() {
+    // Overlay detection needs only the section table, so the PE is parsed with
+    // every optional structure switched off and in permissive mode. These three
+    // stubs are rejected outright by a strict parse:
+    //
+    //   nsis203_ansi  - resource directory offset points past the appended data
+    //   park2_unicode - base relocations at an RVA that cannot be mapped
+    //   park3_unicode - likewise
+    //
+    // 7-Zip mis-detects the two Park stubs as plain PE files for the same
+    // reason and cannot list them without an explicit `-tnsis`.
+    for name in ["nsis203_ansi.exe", "park2_unicode.exe", "park3_unicode.exe"] {
+        let data = fixture_bytes(name);
+
+        let strict = goblin::pe::PE::parse(data);
+        assert!(
+            strict.is_err(),
+            "{name}: expected a strict parse to fail; if the stub is now clean, \
+             this test no longer covers the lenient path"
+        );
+
+        let inst = NsisInstaller::from_bytes(data)
+            .unwrap_or_else(|e| panic!("{name}: should parse despite the malformed PE: {e}"));
+        assert!(inst.entry_count() > 0, "{name}: no entries");
+        for file in inst.files() {
+            let file = file.unwrap_or_else(|e| panic!("{name}: file entry failed: {e}"));
+            assert!(!file.decompress().unwrap().is_empty(), "{name}: empty file");
+        }
+    }
+}
+
+#[test]
+fn multi_block_bzip2_solid_stream_is_byte_exact() {
+    // Regression: a block whose final BWT byte was consumed as an RLE repeat
+    // count used to emit that count byte as data, inserting one spurious byte
+    // and shifting every file stored after it. It only shows on streams of more
+    // than one block, so no fixture caught it until a 72 MiB payload (~84
+    // blocks) was added.
+    //
+    // `oversize_bzip2_solid` and `oversize_lzma_solid` are built from the same
+    // script, so their decompressed solid streams must be identical.
+    let budget = 256 * 1024 * 1024;
+    let parse = |name: &str| {
+        NsisInstaller::builder(fixture_bytes(name))
+            .max_decompressed_size(budget)
+            .parse()
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+    };
+    let bzip2 = parse("oversize_bzip2_solid.exe");
+    let lzma = parse("oversize_lzma_solid.exe");
+
+    let (a, b) = (bzip2.solid_data(), lzma.solid_data());
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "bzip2 and lzma builds of the same script must decode to the same length"
+    );
+    if let Some(i) = (0..a.len()).find(|&i| a[i] != b[i]) {
+        panic!(
+            "bzip2 output diverges from lzma at byte {i}: {:#04X} vs {:#04X}",
+            a[i], b[i]
+        );
+    }
+
+    // The file stored after the 72 MiB payload is the one a shifted stream
+    // loses first.
+    let names: Vec<String> = bzip2
+        .files()
+        .map(|f| f.unwrap().name().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["payload.txt", "big.bin", "config.ini"]);
+
+    let big = bzip2
+        .files()
+        .nth(1)
+        .unwrap()
+        .unwrap()
+        .decompress()
+        .expect("the 72 MiB payload should decompress");
+    assert_eq!(big.len(), 75_497_472);
+    assert!(big.iter().all(|&b| b == 0), "payload should be all zeros");
+}
+
+#[test]
 fn all_fixtures_produce_consistent_headers() {
     let fixtures = [
         "deflate_nonsolid.exe",
@@ -720,7 +802,7 @@ fn all_fixtures_produce_consistent_headers() {
         "bzip2_nonsolid.exe",
         "bzip2_solid.exe",
         "full_featured.exe",
-        "ansi_deflate.exe",
+        "deflate_single_file.exe",
     ];
     for name in fixtures {
         let inst = parse_fixture(name);

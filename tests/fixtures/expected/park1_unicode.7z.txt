@@ -1,0 +1,46 @@
+
+7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
+
+Scanning the drive for archives:
+1 file, 37734 bytes (37 KiB)
+
+Listing archive: park1_unicode.exe
+
+--
+Path = park1_unicode.exe
+Type = Nsis
+Physical Size = 37734
+Method = LZMA:23
+Solid = +
+Headers Size = 18664
+Embedded Stub Size = 35840
+SubType = NSIS-Park-1 Unicode
+
+----------
+Path = payload.txt
+Size = 53
+Packed Size = 1890
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 0
+
+Path = docs\config.ini
+Size = 23
+Packed Size = 
+Modified = 2026-08-15 07:41:08.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 57
+
+Path = uninstall.exe
+Size = 
+Packed Size = 
+Modified = 
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 84
+
