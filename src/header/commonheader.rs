@@ -116,18 +116,34 @@ impl<'a> CommonHeader<'a> {
 
         // Validate block offsets are within bounds (except Data block which may
         // reference the original file, not the decompressed header).
+        //
+        // The blocks are also written in this order, so their offsets never go
+        // backwards. That is worth checking because it is what tells this
+        // header apart from an NSIS 1.x one, which has no block table at all:
+        // read as a block table, a 1.x header's string pointers are in range
+        // but arbitrary, and land out of order. Empty blocks are skipped —
+        // nothing was written for them, so their offset means nothing.
+        let mut lowest = 0u32;
         for (i, block) in blocks.iter().enumerate() {
             if i == BlockType::Data as usize {
                 continue;
             }
-            let off = block.offset() as usize;
-            if off > data.len() && block.num() > 0 {
-                let bt = BlockType::from_index(i).unwrap_or(BlockType::Pages);
-                return Err(Error::InvalidBlockOffset {
-                    block: bt.name(),
-                    offset: block.offset(),
-                });
+            let bt = BlockType::from_index(i).unwrap_or(BlockType::Pages);
+            let out_of_range = |offset| Error::InvalidBlockOffset {
+                block: bt.name(),
+                offset,
+            };
+            if block.num() <= 0 {
+                continue;
             }
+            let off = block.offset();
+            if off as usize > data.len() {
+                return Err(out_of_range(off));
+            }
+            if off < lowest {
+                return Err(out_of_range(off));
+            }
+            lowest = off;
         }
 
         Ok(Self {
@@ -424,6 +440,38 @@ mod tests {
     fn parse_too_short() {
         let data = [0u8; COMMON_HEADER_MIN_SIZE - 1];
         assert!(CommonHeader::parse(&data).is_err());
+    }
+
+    #[test]
+    fn blocks_that_go_backwards_are_not_a_block_table() {
+        // NSIS writes the blocks in this order, so their offsets never
+        // decrease. When they do, these are not block descriptors: an NSIS 1.x
+        // header has no block table, and its string pointers land here — in
+        // range, but arbitrary. A real 1.98 installer's header reads exactly
+        // like this, with Sections behind Pages and Entries at 0.
+        let mut blocks = [(0u32, 0i32); BLOCKS_NUM];
+        blocks[BlockType::Pages as usize] = (5826, 5833);
+        blocks[BlockType::Sections as usize] = (5779, 5846);
+        blocks[BlockType::Entries as usize] = (0, 5);
+        let data = make_common_header(0, &blocks);
+        assert!(matches!(
+            CommonHeader::parse(&data),
+            Err(Error::InvalidBlockOffset { .. })
+        ));
+    }
+
+    #[test]
+    fn an_empty_block_does_not_have_to_be_in_order() {
+        // Nothing was written for an empty block, so its offset means nothing
+        // and must not be held to the ordering — an installer with no pages
+        // still has a string table well past offset 0.
+        let mut blocks = [(0u32, 0i32); BLOCKS_NUM];
+        blocks[BlockType::Sections as usize] = (100, 2);
+        blocks[BlockType::Entries as usize] = (148, 4);
+        blocks[BlockType::LangTables as usize] = (0, 0);
+        blocks[BlockType::Strings as usize] = (200, 40);
+        let data = make_common_header(0, &blocks);
+        assert!(CommonHeader::parse(&data).is_ok());
     }
 
     #[test]
