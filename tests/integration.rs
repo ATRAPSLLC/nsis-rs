@@ -443,7 +443,7 @@ fn symbolic_formatting_uses_script_analysis_symbols() {
     let mut saw_symbolic_target = false;
     for (index, entry) in inst.entries().enumerate() {
         let entry = entry.unwrap();
-        let line = inst.format_entry_with_analysis(&entry, &analysis);
+        let line = inst.format_entry_with_analysis(&entry, analysis);
         if line.contains("=>") && line.contains("(@") {
             saw_symbolic_target = true;
         }
@@ -459,6 +459,44 @@ fn symbolic_formatting_uses_script_analysis_symbols() {
         saw_symbolic_target,
         "should render at least one symbolic target"
     );
+}
+
+#[test]
+fn script_analysis_is_computed_once() {
+    let inst = parse_fixture("full_featured.exe");
+    let first = inst.script_analysis().unwrap();
+    let second = inst.script_analysis().unwrap();
+
+    // The same analysis is handed back rather than rebuilt: walking the whole
+    // entry stream is not cheap, and the formatters take it as an argument, so
+    // callers ask for it repeatedly.
+    assert!(
+        std::ptr::eq(first, second),
+        "repeated calls should return the same analysis"
+    );
+}
+
+#[test]
+fn entries_render_into_a_reused_buffer() {
+    // The buffer form must produce exactly what the allocating one does.
+    let inst = parse_fixture("full_featured.exe");
+    let analysis = inst.script_analysis().unwrap();
+
+    let mut line = String::new();
+    for entry in inst.entries() {
+        let entry = entry.unwrap();
+
+        line.clear();
+        inst.write_entry(&mut line, &entry);
+        assert_eq!(line, inst.format_entry(&entry));
+
+        line.clear();
+        inst.write_entry_params_with_analysis(&mut line, &entry, analysis);
+        assert_eq!(
+            line,
+            inst.format_entry_params_with_analysis(&entry, analysis)
+        );
+    }
 }
 
 #[test]

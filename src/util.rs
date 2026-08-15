@@ -1,8 +1,19 @@
 //! Low-level byte-reading utilities for little-endian structure access.
 //!
-//! These functions use checked indexing to avoid panics. They return
-//! sensible defaults (zero) when the offset is out of bounds, relying
-//! on the caller's `parse()` constructor to validate bounds upfront.
+//! These functions use checked indexing to avoid panics, returning zero when
+//! the offset is out of bounds.
+//!
+//! # The contract these rely on
+//!
+//! Returning zero for a short read is safe only because it never happens: every
+//! view type validates its length in `parse` and stores a slice trimmed to
+//! exactly the structure size, so its accessors read within bounds by
+//! construction. Each has a `parse_too_short` test holding that up.
+//!
+//! A new view type must do the same. Reading a truncated structure through
+//! these helpers would not fail — it would report a field full of zeros, which
+//! is indistinguishable from a real value and is exactly the kind of quiet
+//! wrongness this crate exists to avoid.
 
 /// Reads a little-endian `u16` from `data` at the given byte `offset`.
 ///
