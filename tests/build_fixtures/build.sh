@@ -13,12 +13,14 @@
 # NSIS installation. Point these at the directory holding each makensis.exe:
 #
 #   NSIS_310   NSIS 3.10        (default C:\NSIS)
+#   NSIS_310L  NSIS 3.10 logging build (the "special build", NSIS_CONFIG_LOG=yes)
 #   NSIS_246   NSIS 2.46
 #   NSIS_225   NSIS 2.25
 #   NSIS_203   NSIS 2.03
 #   PARK_2461  NSIS 2.46.1-Unicode (Jim Park fork)
 #   PARK_2462  NSIS 2.46.2-Unicode
 #   PARK_2463  NSIS 2.46.3-Unicode
+#   NSIS_198   NSIS 1.98 (the last 1.x release)
 #
 # Usage:  ./build.sh [fixture ...]     (no arguments rebuilds everything)
 
@@ -29,12 +31,14 @@ PORT="${NSIS_BUILD_PORT:-22}"
 REMOTE_DIR="${NSIS_BUILD_DIR:-%USERPROFILE%\\nsis_fixtures}"
 
 NSIS_310="${NSIS_310:-C:\\NSIS}"
+NSIS_310L="${NSIS_310L:-}"
 NSIS_246="${NSIS_246:-}"
 NSIS_225="${NSIS_225:-}"
 NSIS_203="${NSIS_203:-}"
 PARK_2461="${PARK_2461:-}"
 PARK_2462="${PARK_2462:-}"
 PARK_2463="${PARK_2463:-}"
+NSIS_198="${NSIS_198:-}"
 
 SSH=(ssh -p "$PORT" "$NSIS_BUILD_HOST")
 SCP_PORT=(-P "$PORT")
@@ -50,6 +54,8 @@ compiler_for() {
         park1_unicode) echo "$PARK_2461" ;;
         park2_unicode) echo "$PARK_2462" ;;
         park3_unicode) echo "$PARK_2463" ;;
+        opcodes_logbuild) echo "$NSIS_310L" ;;
+        nsis1x)        echo "$NSIS_198" ;;
         *)             echo "$NSIS_310" ;;
     esac
 }
@@ -96,7 +102,9 @@ for name in "${targets[@]}"; do
     fi
 
     # Ground truth for the parser tests. 7-Zip mis-detects the larger Park
-    # stubs as plain PE files, so those need an explicit archive type.
+    # stubs as plain PE files, so those need an explicit archive type. It
+    # cannot open an NSIS 1.x installer at all, so nsis1x's listing holds the
+    # refusal instead — that is the ground truth for it.
     listing_flags=(-slt -sccUTF-8)
     case "$name" in
         park2_unicode|park3_unicode) listing_flags+=(-tnsis) ;;

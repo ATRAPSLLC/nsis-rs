@@ -68,6 +68,23 @@ struct Fixture {
     version_defect: Option<&'static str>,
     /// Set when a known defect makes extracted names disagree with 7-Zip.
     name_defect: Option<&'static str>,
+    /// Where the expected contents come from.
+    ground_truth: GroundTruth,
+}
+
+/// Where a fixture's expected file list comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GroundTruth {
+    /// The committed `7z l -slt` listing in `tests/fixtures/expected/`.
+    SevenZip,
+    /// An explicit list, with the sizes makensis reported when building it.
+    ///
+    /// 7-Zip cannot open an NSIS 1.x installer — it refuses both the fixture
+    /// and NSIS's own 1.98 distribution — so there is no listing to compare
+    /// against and the build log is the only record of what the file holds.
+    /// The `.7z.txt` for such a fixture holds 7-Zip's refusal instead, which is
+    /// what makes the absence deliberate rather than an oversight.
+    BuildLog(&'static [(&'static str, u64)]),
 }
 
 const FIXTURES: &[Fixture] = &[
@@ -85,6 +102,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "deflate_solid",
@@ -99,6 +117,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "lzma_nonsolid",
@@ -113,6 +132,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "lzma_solid",
@@ -127,6 +147,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "bzip2_nonsolid",
@@ -141,6 +162,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "bzip2_solid",
@@ -155,6 +177,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "full_featured",
@@ -169,6 +192,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "deflate_single_file",
@@ -183,6 +207,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     // -- ANSI, NSIS 3.10 (`Unicode false`) --
     Fixture {
@@ -198,6 +223,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "ansi3_latin1",
@@ -212,6 +238,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     // -- NSIS 2.x, ANSI --
     Fixture {
@@ -227,6 +254,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "nsis225_ansi",
@@ -241,6 +269,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "nsis246_ansi_solid",
@@ -255,6 +284,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "nsis246_ansi_latin1",
@@ -271,6 +301,7 @@ const FIXTURES: &[Fixture] = &[
         // NSIS 2 escapes literal 0xFC-0xFF with the SKIP code, so these decode
         // correctly — the mirror image of `ansi3_latin1`.
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     // -- Jim Park's Unicode fork --
     Fixture {
@@ -286,6 +317,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "park2_unicode",
@@ -300,6 +332,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "park3_unicode",
@@ -314,6 +347,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     // -- Directory-structure references --
     Fixture {
@@ -329,6 +363,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "dirs_nsis246_ansi_solid",
@@ -343,6 +378,57 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
+    },
+    // -- Instructions above the opcode-shift boundary --
+    Fixture {
+        name: "opcodes_high",
+        compiler: "makensis 3.10 (x86-unicode)",
+        version: NsisVersion::V3,
+        nsis2_sub: None,
+        encoding: StringEncoding::Unicode,
+        method: CompressionMethod::Deflate,
+        mode: CompressionMode::NonSolid,
+        files: 1,
+        uninstallers: 0,
+        budget: DEFAULT_BUDGET,
+        version_defect: None,
+        name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
+    },
+    Fixture {
+        name: "opcodes_logbuild",
+        compiler: "makensis 3.10 logging build (x86-unicode)",
+        version: NsisVersion::V3,
+        nsis2_sub: None,
+        encoding: StringEncoding::Unicode,
+        method: CompressionMethod::Deflate,
+        mode: CompressionMode::NonSolid,
+        files: 1,
+        uninstallers: 0,
+        budget: DEFAULT_BUDGET,
+        version_defect: None,
+        name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
+    },
+    // -- NSIS 1.x, a different container format --
+    Fixture {
+        name: "nsis1x",
+        compiler: "makensis 1.98",
+        version: NsisVersion::V1,
+        nsis2_sub: None,
+        encoding: StringEncoding::Ansi,
+        method: CompressionMethod::Deflate,
+        mode: CompressionMode::NonSolid,
+        files: 1,
+        uninstallers: 0,
+        budget: DEFAULT_BUDGET,
+        version_defect: None,
+        name_defect: None,
+        // Relative to the install directory, as a 7-Zip listing would be.
+        // nsis1x.nsi extracts one file, and makensis 1.98 reported the whole
+        // installer as 1 section and 3 instructions.
+        ground_truth: GroundTruth::BuildLog(&[("payload.txt", 54)]),
     },
     // -- Payload larger than the default budget --
     Fixture {
@@ -358,6 +444,7 @@ const FIXTURES: &[Fixture] = &[
         budget: LARGE_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "oversize_bzip2_solid",
@@ -372,6 +459,7 @@ const FIXTURES: &[Fixture] = &[
         budget: LARGE_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
     Fixture {
         name: "oversize_zlib_solid",
@@ -386,6 +474,7 @@ const FIXTURES: &[Fixture] = &[
         budget: LARGE_BUDGET,
         version_defect: None,
         name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
     },
 ];
 
@@ -495,12 +584,27 @@ fn every_fixture_file_is_declared() {
 #[test]
 fn every_fixture_has_a_ground_truth_listing() {
     for fixture in FIXTURES {
-        let items = read_listing(fixture.name);
-        assert!(
-            !items.is_empty(),
-            "{}: ground-truth listing has no items",
-            fixture.name
-        );
+        match fixture.ground_truth {
+            GroundTruth::SevenZip => assert!(
+                !read_listing(fixture.name).is_empty(),
+                "{}: ground-truth listing has no items",
+                fixture.name
+            ),
+            GroundTruth::BuildLog(expected) => {
+                assert!(
+                    !expected.is_empty(),
+                    "{}: declares no expected contents",
+                    fixture.name
+                );
+                // The listing still has to be there, holding 7-Zip's refusal:
+                // that is what says no listing was possible.
+                assert!(
+                    read_listing(fixture.name).is_empty(),
+                    "{}: 7-Zip can list this after all — use GroundTruth::SevenZip",
+                    fixture.name
+                );
+            }
+        }
     }
 }
 
@@ -563,11 +667,17 @@ fn extracted_files_match_the_7zip_listing() {
 
         // 7-Zip lists the uninstaller as an archive item; this crate reports it
         // through `uninstallers()`, which `declared_metadata_matches` checks.
-        let mut expected: Vec<(String, Option<u64>)> = read_listing(name)
-            .into_iter()
-            .filter(|item| !item.path.ends_with("uninstall.exe"))
-            .map(|item| (item.path, item.size))
-            .collect();
+        let mut expected: Vec<(String, Option<u64>)> = match fixture.ground_truth {
+            GroundTruth::SevenZip => read_listing(name)
+                .into_iter()
+                .filter(|item| !item.path.ends_with("uninstall.exe"))
+                .map(|item| (item.path, item.size))
+                .collect(),
+            GroundTruth::BuildLog(items) => items
+                .iter()
+                .map(|(path, size)| (normalize(path), Some(*size)))
+                .collect(),
+        };
         expected.sort();
 
         // Full destination paths, not just names: the directory a file lands
@@ -595,7 +705,7 @@ fn extracted_files_match_the_7zip_listing() {
             None => {
                 assert_eq!(
                     our_paths, expected_paths,
-                    "{name} ({}): destination paths differ from 7-Zip",
+                    "{name} ({}): destination paths differ from the ground truth",
                     fixture.compiler
                 );
             }
