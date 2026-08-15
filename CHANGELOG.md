@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `NsisString::to_install_path()`, rendering the path as the installer itself
+  would write it — references kept verbatim, backslash separators, a leading
+  `$INSTDIR\` removed — which is what 7-Zip lists for the same archive.
+  `to_path()` remains the sanitised form for extraction.
+- `NsisString::write_path()` and `strings::PathStyle`, the allocation-free form
+  behind both renderers, for callers rendering many paths into a reused buffer.
 - `Nsis2SubVersion`, identifying which NSIS 2.x variable layout an installer
   uses (`UpTo203`, `UpTo225`, `From226`), with `internal_var_count()` and
   `spec_outdir_var_index()`. Read it with `NsisInstaller::nsis2_sub_version()`,
@@ -25,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `NsisString`'s `Display` now matches 7-Zip's wording for references that
+  cannot be resolved statically: language strings render as `$(LSTR_n)` rather
+  than `${LANG:n}`, and an unmappable shell folder as
+  `$_ERROR_UNSUPPORTED_SHELL_[primary,fallback]` rather than `$SHELL(a,b)`.
+- `to_path()` renders language strings as `_lang_<id>` instead of dropping
+  them, so two files whose names differ only by the reference no longer collide
+  on one path, and unmappable shell folders as `_shell_<primary>_<fallback>`.
 - **Breaking:** `NsisVersion::detect` takes the string table as a third
   argument, which it needs to tell an ANSI NSIS-3 installer from an NSIS 2 one.
 - **Breaking:** `decompress::decompress_block` and the per-codec entry points
@@ -34,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `to_path()` no longer keeps absolute prefixes, which let extraction escape the
+  output directory. `C:\evil.exe` rendered as `C:/evil.exe`, and on Windows
+  joining an absolute path onto a base discards the base — so an installer
+  could write to the drive root through the crate's own extraction example.
+  Drive specifiers, UNC prefixes and leading separators are now removed.
+- `to_path()` handles `..` per path component instead of by substring, so
+  ordinary names survive: `file..txt` stayed `file..txt` rather than becoming
+  `file_txt`. Repeated separators now collapse fully (`a///b` gave `a//b`), and
+  `.` components are dropped.
 - ANSI installers built by makensis 3.x are no longer reported as NSIS 2.
   Version detection mapped an ANSI string table to NSIS 2 unconditionally, but
   makensis 3.x compiles an ANSI target whenever a script omits `Unicode true`.
