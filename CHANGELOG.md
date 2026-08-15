@@ -5,10 +5,70 @@ All notable changes to the `nsis` crate are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-08-15
 
 ### Added
 
+- Support for NSIS 1.x installers, which previously failed to parse at all.
+  1.x predates the block table: a fixed 240-byte header is followed by the
+  section, instruction and string tables laid end to end, its sections are 20
+  bytes and its instructions 24. It also has its own opcode numbering, its own
+  string encoding, and its own bzip2 and first-header-flag layouts — see below.
+  `header::V1Header` exposes the header, and `NsisInstaller` reads such a file
+  through the same interface as any other.
+- `opcode::OPCODES_V1` and `opcode::lookup_v1()`, the NSIS 1.x instruction
+  table, with `opcode::canonical_opcode()` mapping a 1.x opcode onto the
+  numbering this crate reports elsewhere and `opcode::param_layout_v1()` giving
+  its operand layout.
+- `strings::v1`, the NSIS 1.x string encoding, where a single byte at or above
+  `VAR_CODES_START` is a whole variable reference.
+- `StringTable::var_instdir()`, `var_outdir()`, `var_exedir()`, `var_temp()`
+  and `var_pluginsdir()`, resolving a built-in variable's index through the
+  installer's own layout — 1.x numbers them differently, and `$PLUGINSDIR`
+  predates it entirely.
+- `opcode::ParamLayout` and `opcode::param_layout()`, resolving the operand
+  layout of an instruction whose opcode carries several script commands.
+- `nsis::SectionLayout` and `Section::parse_with_layout()`, plus
+  `EntryIter::with_stride()` and `Entry::parse_sized()`, for reading the
+  narrower 1.x tables.
+- `header::firstheader::FH_V1_FLAGS_*` and `NsisInstaller::is_silent()`. NSIS
+  2.0 renumbered the first-header flags, so which bit means what depends on the
+  version.
+- `header::v1header::V1HeaderKind`. NSIS 1.x writes a different, shorter header
+  for an uninstaller — 120 bytes with no section table, where an installer has
+  240 followed by one. The FirstHeader says which, so an extracted 1.x
+  uninstaller now decodes its own script rather than reading string bytes as
+  instructions.
+
+- `NsisInstaller::write_entry()`, `write_entry_params()` and
+  `write_entry_params_with_analysis()`, rendering into a caller's buffer so a
+  disassembly loop needs one allocation rather than one per line.
+- `opcode::normalize_log_opcode()` and `opcode::find_bad_opcode()`, translating
+  a logging-enabled build onto the standard opcode layout and reporting whether
+  an entry block is consistent with a layout at all, plus
+  `opcode::standard_layout()` and `opcode::log_layout()`, the two resolvers a
+  build is told apart by.
+- `NsisInstaller::is_log_build()`, reporting whether the installer came from a
+  makensis compiled with logging.
+- `NsisInstaller::instructions()`, walking the entry stream once and yielding a
+  typed `Instruction`. The existing typed iterators are now filters over the
+  same walk, so a consumer wanting several kinds of instruction no longer
+  traverses the script several times.
+- `ExtractedFile::dest_path()` and `out_dir()`, reconstructing where a file is
+  actually written by following `SetOutPath`. Render with `to_install_path()`
+  for 7-Zip's form or `to_path()` for a path safe to join onto an output
+  directory.
+- Common-header accessors for the rest of the structure:
+  `NsisInstaller::install_dir()`, `install_dir_auto_append()`,
+  `install_reg_key()`, `install_reg_value()`, `install_reg_root_name()`,
+  `uninstall_command()`, `uninstall_child()` and `wininit_path()`.
+- `strings::StringTable`, the decoding context (encoding, special-code range,
+  variable layout, and the table itself), with `read()`, `variable_name()` and
+  `shell_target()`. Reachable as `NsisInstaller::string_table()`.
+- `strings::ShellTarget`, describing what a shell-folder reference resolves to,
+  including the registry-backed Program Files and Common Files directories.
+- `Debug` on the public types that lacked it, including `NsisInstaller`,
+  `ExtractedFile`, every analysis view and every iterator.
 - `strings::ansi::AnsiCodeRange`, selecting which ANSI special-code range a
   string table uses, with `for_version()`.
 - `NsisString::to_install_path()`, rendering the path as the installer itself
@@ -22,8 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `spec_outdir_var_index()`. Read it with `NsisInstaller::nsis2_sub_version()`,
   which returns `None` for every other version.
 - `strings::detect_ansi_nsis3()`, which reports whether an ANSI string table
-  uses the NSIS 3 special-code range, and `strings::read_string_at()`, the
-  free function behind `NsisInstaller::read_string`.
+  uses the NSIS 3 special-code range.
 - `SolidStatus`, reporting how an installer's solid file-data stream
   decompressed: `NotSolid`, `Complete`, `Truncated { limit }`, or
   `Failed(Error)`. Read it with `NsisInstaller::solid_status()`.
@@ -33,8 +92,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Breaking:** `strings::read_nsis_string`, `strings::read_string_at` and
-  `strings::ansi::read_ansi_string` take the ANSI code range to decode with.
+- **Breaking:** `opcode::OPCODES` replaces `OPCODES_NSIS2` and `OPCODES_NSIS3`,
+  which were the same table. NSIS 2 and NSIS 3 number their instructions
+  identically; what varies is which instructions a build has, and that is
+  handled by normalisation. `opcode::lookup` drops its version argument and
+  `lookup_normalized` is removed — `NsisInstaller::resolve_opcode` applies
+  whichever normalisation the installer needs.
+- **Breaking:** `NsisInstaller::script_analysis()` returns `&ScriptAnalysis`.
+  It is built on first use and borrowed thereafter, rather than rebuilt on every
+  call.
+- **Breaking:** `StringSegment::Variable` and `ShellFolder` are struct variants
+  carrying what the reference resolved to — the variable's name, and a
+  `ShellTarget` — decided while decoding, where the variable layout and string
+  table are in reach. Rendering is now context-free, which is what makes
+  `Display` correct: it takes no extra argument, so passing context into
+  rendering could never have fixed it.
+- **Breaking:** the `EW_*` opcode constants live in `opcode` rather than the
+  crate root, beside the tables that give them meaning. `NsisVersion`,
+  `ParkSubVersion` and `OpcodeInfo` are re-exported at the root alongside
+  `Nsis2SubVersion`.
+- **Breaking:** `strings::read_nsis_string` and the per-encoding readers take a
+  `StringTable` instead of a byte slice plus loose parameters;
+  `strings::read_string_at` is replaced by `StringTable::read`.
+- **Breaking:** `strings::shell_folder_name` takes the resolved folder ids and
+  target rather than a packed `u16`.
+- **Breaking:** `CommonHeader::parse` no longer takes a version hint, and
+  `header::NsisVersionHint` is removed. It was always `Unknown` in practice and
+  never changed a parsing decision.
 - `NsisString`'s `Display` now matches 7-Zip's wording for references that
   cannot be resolved statically: language strings render as `$(LSTR_n)` rather
   than `${LANG:n}`, and an unmappable shell folder as
@@ -51,6 +135,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- NSIS 1.x installers failed to parse. The parser read every file as though it
+  had a block table, so a 1.x header's string pointers were read as block
+  descriptors and rejected as out of range.
+- The opcode table was shifted from `EW_WRITEUNINSTALLER` up, numbering the log
+  instruction as though every build has it. `SectionSetText` was reported as
+  `Log`, `GetKnownFolderPath` as `InstTypeSet` and `FileWriteUTF16LE` as
+  `LockWindow`. Which layout a file uses is now decided by which one its entry
+  stream is consistent with.
+- Instructions that pack several script commands into one opcode lost operands
+  rather than merely mislabelling them: `SectionSetText` keeps its text in the
+  fifth slot, which the fixed layout marks unused, so the text never appeared.
+  `LogSet`'s on/off flag was read as a string offset and rendered as whatever
+  text sat at offset 1.
+- NSIS 1.x bzip2 streams could not be decoded. 1.x keeps standard bzip2's
+  per-block randomised flag, which NSIS 2.0 dropped, so the decoder read every
+  such block one bit out of alignment.
+- `files()` and `section_entries()` built entry iterators with a fixed 28-byte
+  stride instead of the installer's, so an installer whose entries are a
+  different size yielded no files.
+- `Uninstaller::data_offset()` read an operand NSIS 1.x does not have, which
+  reads as `0`, so extracting a 1.x uninstaller returned whatever sat at the
+  start of the data block. 1.x records the offset on the header instead.
+- A block table's offsets were only range-checked, not checked for being in
+  the order NSIS writes them. An NSIS 1.x header has no block table at all, so
+  a large enough one passed validation and was parsed as NSIS 2 — NSIS's own
+  1.98 distribution installer reported 5846 sections and no files.
+
+- Opcodes above `EW_WRITEUNINSTALLER` are no longer off by one. The table
+  numbered the log instruction as though it were always present, but NSIS
+  compiles it conditionally and a standard makensis leaves it out — so
+  `SectionSetText` was reported as `EW_LOG`, `GetOsInfo` as `EW_INSTTYPESET`,
+  `LockWindow` as `EW_RESERVEDOPCODE`, `FileWriteUTF16LE` as `EW_LOCKWINDOW`,
+  and `FindProc` had no table entry at all. Mnemonic, parameter names, types
+  and count were wrong for every one of them. A logging-enabled build is
+  detected and translated onto the same layout.
+- Twelve opcodes had parameter counts below what NSIS actually passes,
+  including `EW_WRITEREG`, whose sixth operand distinguishes `REG_EXPAND_SZ`
+  from `REG_SZ` — the disassembly was dropping it. Counts now match both
+  reference implementations.
+- Extracted files report the directory they are written to. `files()` exposed
+  only what `EW_EXTRACTFILE` stores — usually a bare name — so installers that
+  place files into subdirectories through the instruction stream lost the
+  structure: 7-Zip listed `Lang\de_DE.ini` where this crate said `de_DE.ini`.
+  The entry walk now follows `SetOutPath`, including targets written relative
+  to the current directory or to `$_OUTDIR`, whose variable index moved in NSIS
+  2.26.
+- ANSI shell-folder references decode from the two raw folder ids rather than
+  through the 14-bit number transform, which is for numbers and folds the
+  fallback id into the primary. An installer declaring
+  `InstallDir "$PROGRAMFILES\App"` reported `$INTERNET\App`.
+- Park keeps the fallback shell-folder id instead of discarding the high byte,
+  matching the Unicode decoder.
+- Registry-backed shell folders resolve their value name, so `$COMMONFILES` is
+  no longer reported as `$PROGRAMFILES`.
+- Variable names honour the NSIS 2 variable layout, including the shift above
+  `$EXEPATH` in 2.04-2.25, rather than assuming the modern 32-variable table.
+- The dump example extracts every file. It deduplicated by data offset, but
+  NSIS stores one copy of duplicated content and extracts it to several
+  destinations, so real files were dropped.
 - ANSI string tables no longer decode with both special-code ranges at once,
   which mangled text. The decoder accepted `0x01-0x04` *and* `0xFC-0xFF` as
   codes, but only one range is live per table and each is ordinary character
@@ -294,6 +437,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of the `nsis` crate.
 
+[0.4.0]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.2.0...v0.2.1
