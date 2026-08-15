@@ -98,6 +98,7 @@ struct HeaderStrings {
 ///     println!("  code_size={}", section.code_size());
 /// }
 /// ```
+#[derive(Debug)]
 pub struct NsisInstaller<'a> {
     /// The original file bytes (borrowed).
     file: &'a [u8],
@@ -1327,6 +1328,7 @@ impl<'a> NsisInstaller<'a> {
 ///     .unwrap();
 /// # let _ = inst.section_count();
 /// ```
+#[derive(Debug)]
 pub struct NsisInstallerBuilder<'a> {
     file: &'a [u8],
     max_decompressed_size: usize,

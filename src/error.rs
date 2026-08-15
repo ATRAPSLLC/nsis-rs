@@ -184,7 +184,18 @@ impl fmt::Display for Error {
     }
 }
 
-impl error::Error for Error {}
+impl error::Error for Error {
+    /// Returns the underlying cause, where one is preserved.
+    ///
+    /// Decompression failures carry the codec's own message rather than its
+    /// error value: those types are not `Clone`, and this enum is, so the
+    /// detail is flattened at the boundary. `Error` therefore has no nested
+    /// source to hand back today; the method is implemented so that adding one
+    /// later is not a breaking change for callers already walking the chain.
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        None
+    }
+}
 
 impl From<GoblinError> for Error {
     /// Converts a goblin parsing error into our [`Error::Goblin`] variant.

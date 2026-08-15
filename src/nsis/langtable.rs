@@ -102,6 +102,7 @@ impl<'a> LangTable<'a> {
 }
 
 /// Iterator over language tables in the language table block.
+#[derive(Debug)]
 pub struct LangTableIter<'a> {
     data: &'a [u8],
     remaining: usize,

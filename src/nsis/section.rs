@@ -217,6 +217,7 @@ impl<'a> Section<'a> {
 }
 
 /// Iterator over NSIS sections in a section block.
+#[derive(Debug)]
 pub struct SectionIter<'a> {
     data: &'a [u8],
     remaining: usize,

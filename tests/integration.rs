@@ -462,14 +462,15 @@ fn symbolic_formatting_uses_script_analysis_symbols() {
 }
 
 #[test]
-fn opcode_constants_are_exported_at_crate_root() {
-    let exported = [
-        nsis::EW_INVALID_OPCODE,
-        nsis::EW_RET,
-        nsis::EW_CALL,
-        nsis::EW_FGETWS,
-    ];
-    assert_eq!(exported, [0, 1, 5, 70]);
+fn opcode_constants_live_in_the_opcode_module() {
+    use nsis::opcode::{EW_CALL, EW_FGETWS, EW_INVALID_OPCODE, EW_RET};
+
+    // The constants sit beside the tables that give them meaning, rather than
+    // flooding the crate root with 70 names.
+    assert_eq!(
+        [EW_INVALID_OPCODE, EW_RET, EW_CALL, EW_FGETWS],
+        [0, 1, 5, 70]
+    );
 }
 
 #[test]
@@ -998,9 +999,7 @@ fn one_walk_yields_what_the_typed_iterators_do() {
                 Instruction::Registry(_) => registry += 1,
                 Instruction::Shortcut(_) => shortcuts += 1,
                 Instruction::Uninstaller(_) => uninstallers += 1,
-                // `Instruction` is non-exhaustive, so a consumer always needs a
-                // catch-all; `Other` lands here alongside any future variant.
-                _ => {}
+                Instruction::Other(_) => {}
             }
         }
 
