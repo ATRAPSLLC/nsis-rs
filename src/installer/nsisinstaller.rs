@@ -23,7 +23,7 @@ use crate::{
         section::{Section, SectionIter},
     },
     opcode::{self, Nsis2SubVersion, NsisVersion, OpcodeInfo, ParkSubVersion, info::ParamType},
-    strings::{self, NsisString, StringEncoding, StringSegment},
+    strings::{self, NsisString, StringEncoding, StringSegment, ansi::AnsiCodeRange},
 };
 
 /// The outcome of decompressing an installer's solid file-data stream.
@@ -93,6 +93,11 @@ pub struct NsisInstaller<'a> {
     version: NsisVersion,
     /// Detected string encoding.
     encoding: StringEncoding,
+    /// Which ANSI special-code range the string table uses.
+    ///
+    /// Only meaningful for an ANSI table, where NSIS 3 and NSIS 2 disagree on
+    /// which byte values are codes rather than text.
+    ansi_codes: AnsiCodeRange,
     /// FirstHeader flags (cached).
     first_header_flags: u32,
     /// Whether the FirstHeader uses a legacy signature.
@@ -299,6 +304,7 @@ impl<'a> NsisInstaller<'a> {
         };
 
         let version = NsisVersion::detect(encoding, is_legacy, string_table);
+        let ansi_codes = AnsiCodeRange::for_version(version);
 
         // Step 5b: Detect Park sub-version by scanning entries.
         let ent_count = ent_count_raw.max(0) as usize;
@@ -325,6 +331,7 @@ impl<'a> NsisInstaller<'a> {
                         &header_data,
                         string_block_offset,
                         encoding,
+                        ansi_codes,
                         offset,
                     )
                     .ok()?;
@@ -411,6 +418,7 @@ impl<'a> NsisInstaller<'a> {
             mode,
             version,
             encoding,
+            ansi_codes,
             first_header_flags: first_header.flags(),
             is_legacy,
             data_block_offset,
@@ -585,6 +593,7 @@ impl<'a> NsisInstaller<'a> {
             &self.header_data,
             string_block_offset,
             self.encoding,
+            self.ansi_codes,
             offset,
         )
     }

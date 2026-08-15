@@ -844,6 +844,26 @@ fn latin1_names_do_not_look_like_nsis2_variable_codes() {
 }
 
 #[test]
+fn latin1_file_names_decode_intact_in_both_ansi_ranges() {
+    // The same script compiled by makensis 3.10 (ANSI) and makensis 2.46. NSIS 3
+    // writes `0xFC-0xFF` as literal text, NSIS 2 escapes them with its SKIP
+    // code — so the two fixtures exercise opposite halves of the decoder and
+    // must produce identical names.
+    for name in ["ansi3_latin1.exe", "nsis246_ansi_latin1.exe"] {
+        let inst = parse_fixture(name);
+        let names: Vec<String> = inst
+            .files()
+            .map(|f| f.unwrap().name().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            ["grüße.txt", "þýÿ.ini"],
+            "{name}: Latin-1 characters should survive decoding"
+        );
+    }
+}
+
+#[test]
 fn all_fixtures_produce_consistent_headers() {
     let fixtures = [
         "deflate_nonsolid.exe",
