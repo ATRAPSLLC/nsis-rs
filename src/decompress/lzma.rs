@@ -99,15 +99,12 @@ pub fn decompress_lzma(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u8>,
     // consumes the LZMA alone header we built above); trailing bytes after
     // the marker (CRC, padding) are left unread, so unlike lzma-rs there is
     // no "more bytes are available" error to tolerate.
-    let mut reader = lzma_rust2::LzmaReader::new_mem_limit(
-        std::io::Cursor::new(&lzma_header),
-        u32::MAX,
-        None,
-    )
-    .map_err(|e| Error::DecompressionFailed {
-        method: "lzma",
-        detail: e.to_string(),
-    })?;
+    let mut reader =
+        lzma_rust2::LzmaReader::new_mem_limit(std::io::Cursor::new(&lzma_header), u32::MAX, None)
+            .map_err(|e| Error::DecompressionFailed {
+            method: "lzma",
+            detail: e.to_string(),
+        })?;
     match std::io::copy(&mut reader, &mut writer) {
         Ok(_) => {}
         Err(e) => {
