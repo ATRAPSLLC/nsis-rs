@@ -11,6 +11,7 @@
 //! Source: `fileform.h` and `exec.c` from the NSIS source code.
 
 pub mod info;
+pub mod v1;
 pub mod version;
 
 use crate::{
@@ -19,6 +20,7 @@ use crate::{
 };
 
 pub use info::{OpcodeInfo, ParamLayout, ParamType, param_layout};
+pub use v1::{OPCODES_V1, canonical_opcode, lookup_v1, param_layout_v1};
 pub use version::{Nsis2SubVersion, NsisVersion, ParkSubVersion};
 
 // Opcode indices from `fileform.h`.
