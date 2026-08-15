@@ -28,7 +28,7 @@ use crate::{
         page::PageIter,
         section::{Section, SectionIter},
     },
-    opcode::{self, Nsis2SubVersion, NsisVersion, OpcodeInfo, ParkSubVersion, info::ParamType},
+    opcode::{self, Nsis2SubVersion, NsisVersion, OpcodeInfo, ParamType, ParkSubVersion},
     strings::{self, NsisString, StringEncoding, StringSegment, StringTable, ansi::AnsiCodeRange},
     util::read_i32_le,
 };
@@ -1002,72 +1002,7 @@ impl<'a> NsisInstaller<'a> {
     /// Writes directly into the caller's buffer, for rendering many entries
     /// without a `String` per line. Existing contents of `out` are kept.
     pub fn write_entry_params(&self, out: &mut String, entry: &Entry<'_>) {
-        let Some(info) = self.resolve_opcode(entry.which()) else {
-            let _ = write!(out, "which={}", entry.which());
-            return;
-        };
-
-        if entry.which() == opcode::EW_PUSHPOP {
-            out.push_str(&self.format_pushpop_params(entry));
-            return;
-        }
-
-        let offsets = entry.offsets();
-        let count = info.param_count as usize;
-        if count == 0 {
-            return;
-        }
-
-        let mut written = 0usize;
-        for (i, ((&val, &name), &ptype)) in offsets
-            .iter()
-            .zip(info.param_names.iter())
-            .zip(info.param_types.iter())
-            .take(count)
-            .enumerate()
-        {
-            // Parameter counts are the maximum an opcode has taken across NSIS
-            // versions, so an instruction compiled by a modern makensis leaves
-            // the extra slots unused. Show a slot this crate has no name for
-            // only when it actually carries something.
-            if name.is_empty() && val == 0 {
-                continue;
-            }
-
-            // Whether this operand prints at all is decided per type, so the
-            // separator is only added once something is actually written.
-            let separate = |out: &mut String, written: &mut usize| {
-                if *written > 0 {
-                    out.push_str(", ");
-                }
-                *written = written.saturating_add(1);
-            };
-
-            match ptype {
-                ParamType::String => {
-                    separate(out, &mut written);
-                    write_named(out, name, &self.format_string_param(val));
-                }
-                ParamType::Variable => {
-                    separate(out, &mut written);
-                    write_named(out, name, &format_variable_param(&self.string_table(), val));
-                }
-                ParamType::Jump => {
-                    if val != 0 {
-                        separate(out, &mut written);
-                        out.push_str(name);
-                        let _ = write!(out, "=>{val}");
-                    }
-                }
-                ParamType::Int => {
-                    if val != 0 || i < count.min(2) {
-                        separate(out, &mut written);
-                        write_named(out, name, &val.to_string());
-                    }
-                }
-                ParamType::Unused => {}
-            }
-        }
+        self.write_params(out, entry, None);
     }
 
     /// Formats an entry as a single script-like line with analysis symbols.
@@ -1150,6 +1085,12 @@ impl<'a> NsisInstaller<'a> {
         entry: &Entry<'_>,
         analysis: &ScriptAnalysis,
     ) {
+        self.write_params(out, entry, Some(analysis));
+    }
+
+    /// Renders an entry's operands, annotating jump targets when an analysis
+    /// is supplied.
+    fn write_params(&self, out: &mut String, entry: &Entry<'_>, analysis: Option<&ScriptAnalysis>) {
         let Some(info) = self.resolve_opcode(entry.which()) else {
             let _ = write!(out, "which={}", entry.which());
             return;
@@ -1161,7 +1102,12 @@ impl<'a> NsisInstaller<'a> {
         }
 
         let offsets = entry.offsets();
-        let count = info.param_count as usize;
+        // Some opcodes carry several script commands and choose between them
+        // with an operand, so the layout is resolved per entry rather than
+        // taken from the opcode alone.
+        let layout =
+            opcode::param_layout(self.normalize_opcode(entry.which()) as u32, info, &offsets);
+        let count = layout.count as usize;
         if count == 0 {
             return;
         }
@@ -1169,14 +1115,21 @@ impl<'a> NsisInstaller<'a> {
         let mut written = 0usize;
         for (i, ((&val, &name), &ptype)) in offsets
             .iter()
-            .zip(info.param_names.iter())
-            .zip(info.param_types.iter())
+            .zip(layout.names.iter())
+            .zip(layout.types.iter())
             .take(count)
             .enumerate()
         {
+            // Parameter counts are the maximum an opcode has taken across NSIS
+            // versions, so an instruction compiled by a modern makensis leaves
+            // the extra slots unused. Show a slot this crate has no name for
+            // only when it actually carries something.
             if name.is_empty() && val == 0 {
                 continue;
             }
+
+            // Whether this operand prints at all is decided per type, so the
+            // separator is only added once something is actually written.
             let separate = |out: &mut String, written: &mut usize| {
                 if *written > 0 {
                     out.push_str(", ");
@@ -1196,12 +1149,18 @@ impl<'a> NsisInstaller<'a> {
                 ParamType::Jump => {
                     if val != 0 {
                         separate(out, &mut written);
-                        out.push_str(&format_symbolic_jump_param(
-                            &self.string_table(),
-                            name,
-                            val,
-                            analysis,
-                        ));
+                        match analysis {
+                            Some(analysis) => out.push_str(&format_symbolic_jump_param(
+                                &self.string_table(),
+                                name,
+                                val,
+                                analysis,
+                            )),
+                            None => {
+                                out.push_str(name);
+                                let _ = write!(out, "=>{val}");
+                            }
+                        }
                     }
                 }
                 ParamType::Int => {

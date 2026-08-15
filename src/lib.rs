@@ -84,4 +84,6 @@ pub use installer::{
     ScriptAnalysisDiagnostic, ScriptFunction, ScriptRoot, ScriptRootKind, ShellExecOp, Shortcut,
     ShortcutIter, SolidStatus, Uninstaller, UninstallerIter,
 };
-pub use opcode::{Nsis2SubVersion, NsisVersion, OpcodeInfo, ParkSubVersion};
+pub use opcode::{
+    Nsis2SubVersion, NsisVersion, OpcodeInfo, ParamLayout, ParamType, ParkSubVersion,
+};
