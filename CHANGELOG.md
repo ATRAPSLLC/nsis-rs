@@ -7,7 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SolidStatus`, reporting how an installer's solid file-data stream
+  decompressed: `NotSolid`, `Complete`, `Truncated { limit }`, or
+  `Failed(Error)`. Read it with `NsisInstaller::solid_status()`.
+- `decompress::Decoded`, the `{ data, truncated }` pair now returned by the
+  decompression entry points. `truncated` distinguishes a buffer that ended
+  naturally from one stopped by a `DecodeLimit::Truncate` budget.
+
+### Changed
+
+- **Breaking:** `decompress::decompress_block` and the per-codec entry points
+  (`decompress_deflate`, `decompress_bzip2`, `decompress_lzma`) return
+  `Decoded` instead of `Vec<u8>`. Callers that only want the bytes can take
+  `.data`.
+
 ### Fixed
+
+- Over-budget solid installers no longer report truncation as data corruption.
+  The solid stream was decoded with `DecodeLimit::Truncate` and the outcome
+  discarded, so every file past the cut failed with a bounds error
+  (`file data payload: expected at least 75497476 bytes, got 67104998`) that
+  gave no hint the budget was responsible. Such files now fail with
+  `Error::OutputTooLarge { limit }`, matching the semantics single-file
+  extraction has had since 0.3.0, and files stored before the cut still
+  extract.
+- Solid-stream decompression failures are no longer swallowed. An
+  `unwrap_or_else(|_| Vec::new())` turned any decode error into an empty
+  `solid_data`, leaving parsing to "succeed" while every file reported a
+  bounds error. The error is now retained and reported from `files()` and
+  `ExtractedFile::decompress()`. Parsing still succeeds, since header
+  structures remain readable either way.
 
 - The NSIS-bzip2 decoder no longer emits filler until the decompression budget
   is exhausted. Its BWT/RLE output loop wrote the tail of a block without

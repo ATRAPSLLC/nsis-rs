@@ -4,7 +4,10 @@
 
 use std::io::Read;
 
-use crate::{decompress::DecodeLimit, error::Error};
+use crate::{
+    decompress::{DecodeLimit, Decoded},
+    error::Error,
+};
 
 /// Chunk size for streaming the unknown-size decode paths.
 const STREAM_CHUNK: usize = 64 * 1024;
@@ -18,12 +21,17 @@ const STREAM_CHUNK: usize = 64 * 1024;
 /// - `compressed`: the raw deflate stream (no zlib/gzip framing)
 /// - `limit`: how the output is bounded — see [`DecodeLimit`]
 ///
+/// # Returns
+///
+/// A [`Decoded`] whose [`truncated`](Decoded::truncated) flag reports whether
+/// the budget cut the output short.
+///
 /// # Errors
 ///
 /// Returns [`Error::DecompressionFailed`] if the deflate stream is invalid, or
 /// [`Error::OutputTooLarge`] if a [`DecodeLimit::Capped`] stream exceeds its
 /// budget.
-pub fn decompress_deflate(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u8>, Error> {
+pub fn decompress_deflate(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded, Error> {
     match limit {
         DecodeLimit::Exact(n) => decompress_bounded(compressed, n),
         DecodeLimit::Capped(n) => decompress_streaming(compressed, n, false),
@@ -32,7 +40,7 @@ pub fn decompress_deflate(compressed: &[u8], limit: DecodeLimit) -> Result<Vec<u
 }
 
 /// Bounded decode: fill an `n`-byte buffer and stop, ignoring trailing input.
-fn decompress_bounded(compressed: &[u8], limit: usize) -> Result<Vec<u8>, Error> {
+fn decompress_bounded(compressed: &[u8], limit: usize) -> Result<Decoded, Error> {
     let mut decompressor = flate2::Decompress::new(false); // raw deflate, no zlib header
     let mut output = vec![0u8; limit];
 
@@ -50,7 +58,13 @@ fn decompress_bounded(compressed: &[u8], limit: usize) -> Result<Vec<u8>, Error>
     match status {
         flate2::Status::Ok | flate2::Status::StreamEnd | flate2::Status::BufError => {
             output.truncate(bytes_written);
-            Ok(output)
+            // `BufError` means the output buffer filled before the input was
+            // consumed — the stream had more to give than `limit` allowed.
+            let truncated = status == flate2::Status::BufError;
+            Ok(Decoded {
+                data: output,
+                truncated,
+            })
         }
     }
 }
@@ -61,7 +75,7 @@ fn decompress_streaming(
     compressed: &[u8],
     max_output: usize,
     truncate: bool,
-) -> Result<Vec<u8>, Error> {
+) -> Result<Decoded, Error> {
     let mut decoder = flate2::read::DeflateDecoder::new(compressed);
     let mut output = Vec::new();
     let mut chunk = [0u8; STREAM_CHUNK];
@@ -82,13 +96,16 @@ fn decompress_streaming(
         if output.len() > max_output {
             if truncate {
                 output.truncate(max_output);
-                break;
+                return Ok(Decoded {
+                    data: output,
+                    truncated: true,
+                });
             }
             return Err(Error::OutputTooLarge { limit: max_output });
         }
     }
 
-    Ok(output)
+    Ok(Decoded::complete(output))
 }
 
 #[cfg(test)]
@@ -110,11 +127,12 @@ mod tests {
 
         // Capped decode (unknown size) round-trips.
         let capped = decompress_deflate(&compressed, DecodeLimit::Capped(original.len())).unwrap();
-        assert_eq!(&capped, original);
+        assert_eq!(&capped.data, original);
+        assert!(!capped.truncated);
 
         // Exact decode (known size) round-trips.
         let exact = decompress_deflate(&compressed, DecodeLimit::Exact(original.len())).unwrap();
-        assert_eq!(&exact, original);
+        assert_eq!(&exact.data, original);
     }
 
     #[test]
@@ -149,6 +167,7 @@ mod tests {
     fn truncate_decode_caps_without_error() {
         let compressed = deflate_zeros(256 * 1024);
         let out = decompress_deflate(&compressed, DecodeLimit::Truncate(4096)).unwrap();
-        assert_eq!(out.len(), 4096);
+        assert_eq!(out.data.len(), 4096);
+        assert!(out.truncated, "a stream cut at the budget must report it");
     }
 }

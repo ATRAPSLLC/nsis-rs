@@ -639,6 +639,7 @@ impl<'a> Uninstaller<'a> {
                 self.installer.compression(),
                 decompress::DecodeLimit::Capped(self.installer.max_decompressed_size()),
             )?
+            .data
         };
 
         // Prepend the PE stub from the original file.

@@ -23,7 +23,7 @@
 use crate::{
     decompress::{self, CompressionMode},
     error::Error,
-    installer::NsisInstaller,
+    installer::{NsisInstaller, nsisinstaller::SolidStatus},
     nsis::entry::{Entry, EntryIter},
     opcode,
     strings::NsisString,
@@ -44,11 +44,16 @@ use crate::{
 ///
 /// # Solid mode
 ///
-/// In solid mode, all files are concatenated in a single compressed stream.
-/// Individual file data cannot be sliced from the original buffer without
-/// decompressing the entire stream. [`data`](Self::data) returns an empty
-/// slice, and [`decompress`](Self::decompress) is not yet supported for
-/// solid installers (it returns an error).
+/// In solid mode, all files are concatenated in a single compressed stream,
+/// which the parser decompresses once and caches. [`data`](Self::data) and
+/// [`decompress`](Self::decompress) then slice that cache, so both work the
+/// same as in non-solid mode.
+///
+/// If the solid stream hit the decompression budget or failed to decode, the
+/// cache is short or empty. Files that fall past that point report the reason —
+/// [`Error::OutputTooLarge`] or the underlying decode error — rather than a
+/// bounds error. See
+/// [`NsisInstaller::solid_status`](crate::installer::NsisInstaller::solid_status).
 pub struct ExtractedFile<'a> {
     installer: &'a NsisInstaller<'a>,
     entry: Entry<'a>,
@@ -134,11 +139,11 @@ impl<'a> ExtractedFile<'a> {
     /// Returns an error if the data is out of bounds or decompression fails.
     pub fn decompress(&self) -> Result<Vec<u8>, Error> {
         let Some((is_compressed, size)) = self.length_prefix() else {
-            return Err(Error::TooShort {
+            return Err(self.solid_failure().unwrap_or(Error::TooShort {
                 expected: 4,
                 actual: 0,
                 context: "file data length prefix",
-            });
+            }));
         };
 
         let source = self.data_source();
@@ -153,10 +158,12 @@ impl<'a> ExtractedFile<'a> {
             context: "file data end overflow",
         })?;
 
-        let payload = source.get(offset..end).ok_or(Error::TooShort {
-            expected: end,
-            actual: source.len(),
-            context: "file data payload",
+        let payload = source.get(offset..end).ok_or_else(|| {
+            self.solid_failure().unwrap_or(Error::TooShort {
+                expected: end,
+                actual: source.len(),
+                context: "file data payload",
+            })
         })?;
 
         if !is_compressed {
@@ -164,16 +171,19 @@ impl<'a> ExtractedFile<'a> {
         }
 
         // The per-file uncompressed size is unknown: the length prefix encodes
-        // the *compressed* size, not the decompressed one. Passing `None` lets
-        // the decoder run to the stream's end-of-stream marker (capped at the
-        // installer's budget) rather than demanding a fixed size — a fixed
-        // `Some(..)` made lzma-rs reject the EOS marker. Over-budget streams
-        // surface as [`Error::OutputTooLarge`] instead of silent truncation.
+        // the *compressed* size, not the decompressed one. `Capped` lets the
+        // decoder run to the stream's end-of-stream marker rather than
+        // demanding a fixed size (a fixed size made the LZMA decoder reject the
+        // EOS marker), and rejects an over-budget stream outright with
+        // `Error::OutputTooLarge` instead of truncating it. A successful decode
+        // is therefore always complete, so the truncation flag says nothing
+        // here.
         decompress::decompress_block(
             payload,
             self.installer.compression(),
             decompress::DecodeLimit::Capped(self.installer.max_decompressed_size()),
         )
+        .map(|decoded| decoded.data)
     }
 
     /// Returns the underlying entry.
@@ -221,6 +231,24 @@ impl<'a> ExtractedFile<'a> {
         decompress::read_length_prefix(slice).ok()
     }
 
+    /// Returns the error to report when this file's data cannot be reached
+    /// because the solid stream is incomplete.
+    ///
+    /// A bounds failure against a truncated or missing solid buffer says
+    /// nothing useful on its own — it reads like corrupt input. Where the
+    /// installer recorded why the stream is short, that reason is reported
+    /// instead.
+    fn solid_failure(&self) -> Option<Error> {
+        if self.installer.compression_mode() != CompressionMode::Solid {
+            return None;
+        }
+        match self.installer.solid_status() {
+            SolidStatus::Truncated { limit } => Some(Error::OutputTooLarge { limit: *limit }),
+            SolidStatus::Failed(e) => Some(e.clone()),
+            SolidStatus::NotSolid | SolidStatus::Complete => None,
+        }
+    }
+
     /// Validates that the file length prefix and payload are within the source.
     fn validate_data_bounds(&self) -> Result<(), Error> {
         let source = self.data_source();
@@ -230,13 +258,13 @@ impl<'a> ExtractedFile<'a> {
             actual: source.len(),
             context: "file data length prefix",
         })?;
-        let prefix = source
-            .get(prefix_offset..prefix_end)
-            .ok_or(Error::TooShort {
+        let prefix = source.get(prefix_offset..prefix_end).ok_or_else(|| {
+            self.solid_failure().unwrap_or(Error::TooShort {
                 expected: prefix_end,
                 actual: source.len(),
                 context: "file data length prefix",
-            })?;
+            })
+        })?;
         let (_, size) = decompress::read_length_prefix(prefix)?;
         let payload_end = prefix_end
             .checked_add(size as usize)
@@ -248,10 +276,12 @@ impl<'a> ExtractedFile<'a> {
         source
             .get(prefix_end..payload_end)
             .map(|_| ())
-            .ok_or(Error::TooShort {
-                expected: payload_end,
-                actual: source.len(),
-                context: "file data payload",
+            .ok_or_else(|| {
+                self.solid_failure().unwrap_or(Error::TooShort {
+                    expected: payload_end,
+                    actual: source.len(),
+                    context: "file data payload",
+                })
             })
     }
 }

@@ -11,7 +11,7 @@
     clippy::indexing_slicing
 )]
 
-use nsis::{Error, NsisInstaller};
+use nsis::{Error, NsisInstaller, SolidStatus};
 
 fn fixture_bytes(name: &str) -> &'static [u8] {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -568,6 +568,146 @@ fn bzip2_solid_data_is_not_padded_to_the_budget() {
         solid.len(),
         lzma.solid_data().len()
     );
+}
+
+#[test]
+fn solid_status_reports_a_complete_decode() {
+    for name in ["lzma_solid.exe", "bzip2_solid.exe", "deflate_solid.exe"] {
+        let inst = parse_fixture(name);
+        assert_eq!(
+            inst.solid_status(),
+            &SolidStatus::Complete,
+            "{name} decodes fully within the default budget"
+        );
+    }
+}
+
+#[test]
+fn non_solid_installers_report_not_solid() {
+    for name in ["lzma_nonsolid.exe", "deflate_nonsolid.exe"] {
+        let inst = parse_fixture(name);
+        assert_eq!(inst.solid_status(), &SolidStatus::NotSolid, "{name}");
+    }
+}
+
+/// Byte offset just past the first file's payload in the solid stream.
+fn first_file_end(inst: &NsisInstaller<'_>) -> usize {
+    let file = inst.files().next().unwrap().unwrap();
+    // 4-byte stream length prefix + header block + the file's own framing.
+    4 + inst.header_data().len() + file.data_block_offset() as usize + 4 + file.data().len()
+}
+
+#[test]
+fn budget_truncation_reports_the_budget_not_a_bounds_error() {
+    // Regression for the reported behaviour: an over-budget solid installer
+    // parsed successfully but every file failed with
+    //   "file data payload: expected at least 75497476 bytes, got 67104998"
+    // which reads like data corruption rather than an exhausted budget.
+    let full = parse_fixture("lzma_solid.exe");
+    assert!(full.files().count() >= 2, "fixture needs two files");
+
+    // A budget that admits the first file's data but not the second's.
+    let budget = first_file_end(&full);
+    let data = fixture_bytes("lzma_solid.exe");
+    let inst = NsisInstaller::builder(data)
+        .max_decompressed_size(budget)
+        .parse()
+        .expect("header parsing must still succeed over budget");
+
+    assert_eq!(
+        inst.solid_status(),
+        &SolidStatus::Truncated { limit: budget },
+        "the parser should record that the stream was cut at the budget"
+    );
+
+    let results: Vec<_> = inst.files().collect();
+
+    // The file stored before the cut is unaffected.
+    let first = results[0]
+        .as_ref()
+        .expect("first file is within the budget");
+    assert!(!first.decompress().unwrap().is_empty());
+
+    // Everything after it names the budget as the reason.
+    for (i, result) in results.iter().enumerate().skip(1) {
+        match result {
+            Err(Error::OutputTooLarge { limit }) => assert_eq!(*limit, budget),
+            Err(e) => panic!("file {i}: expected OutputTooLarge, got {e}"),
+            Ok(f) => panic!("file {i}: expected an error, got {:?}", f.name().unwrap()),
+        }
+    }
+}
+
+#[test]
+fn truncated_solid_decompress_reports_the_budget() {
+    // The same substitution applies to `decompress()`, not just iteration.
+    let data = fixture_bytes("lzma_solid.exe");
+    let inst = NsisInstaller::builder(data)
+        .max_decompressed_size(16)
+        .parse()
+        .expect("header parsing must still succeed");
+
+    assert!(matches!(
+        inst.solid_status(),
+        SolidStatus::Truncated { limit: 16 }
+    ));
+    for result in inst.files() {
+        assert!(matches!(result, Err(Error::OutputTooLarge { limit: 16 })));
+    }
+}
+
+/// Copies a fixture and corrupts the tail of its solid stream, leaving the
+/// header region — which decodes with an exact bound and stops early — intact.
+fn fixture_with_corrupt_solid_tail(name: &str) -> Vec<u8> {
+    use nsis::header::firstheader::FirstHeader;
+
+    let mut data = fixture_bytes(name).to_vec();
+    let inst = parse_fixture(name);
+    let fh_offset = inst.first_header_file_offset();
+    let fh = FirstHeader::parse(&data[fh_offset..]).unwrap();
+
+    let stream_start = fh_offset + FirstHeader::SIZE;
+    let following = fh.length_of_all_following_data() as usize - FirstHeader::SIZE;
+    let crc = if fh.has_no_crc() { 0 } else { 4 };
+    let stream_end = stream_start + following - crc;
+
+    // Scribble over the last stretch of compressed data.
+    for byte in &mut data[stream_end - 16..stream_end] {
+        *byte ^= 0xFF;
+    }
+    data
+}
+
+#[test]
+fn failed_solid_decode_is_reported_not_swallowed() {
+    // Regression: a failed solid decode became an empty `solid_data` via
+    // `unwrap_or_else(|_| Vec::new())`, so parsing "succeeded" and every file
+    // then reported a bounds error with no trace of the real cause.
+    // LZMA, not bzip2: a bzip2 block must be decoded whole, so corrupting its
+    // tail also breaks the header decode. An LZMA stream decodes forward, and
+    // the header's exact-size decode stops long before the damage.
+    let data = fixture_with_corrupt_solid_tail("lzma_solid.exe");
+    let inst = NsisInstaller::from_bytes(&data)
+        .expect("header parsing is unaffected by a corrupt stream tail");
+
+    let SolidStatus::Failed(cause) = inst.solid_status() else {
+        panic!("expected Failed, got {:?}", inst.solid_status());
+    };
+    assert!(
+        matches!(cause, Error::DecompressionFailed { method: "lzma", .. }),
+        "the decode error should be preserved verbatim, got {cause}"
+    );
+
+    // Every file reports that cause rather than a bounds error.
+    let cause = cause.clone();
+    let results: Vec<_> = inst.files().collect();
+    assert!(!results.is_empty(), "the entry stream is still readable");
+    for result in results {
+        match result {
+            Err(e) => assert_eq!(e, cause),
+            Ok(f) => panic!("expected an error, got {:?}", f.name().unwrap()),
+        }
+    }
 }
 
 #[test]
