@@ -21,7 +21,7 @@
 //! Sources: 7-Zip `NsisIn.cpp` (lines 638-996), Binary Refinery `xtnsis.py`.
 
 use crate::error::Error;
-use crate::strings::{NsisString, StringSegment};
+use crate::strings::{NsisString, StringSegment, StringTable};
 
 /// Park special code: next code unit is a literal character.
 const PARK_CODE_SKIP: u16 = 0xE000;
@@ -50,7 +50,8 @@ fn read_u16(table: &[u8], offset: usize) -> Option<u16> {
 ///
 /// Park strings are UTF-16LE. The byte `offset` must be 2-byte aligned
 /// (or at least point to the start of a valid UTF-16LE code unit).
-pub fn read_park_string(table: &[u8], offset: usize) -> Result<NsisString, Error> {
+pub fn read_park_string(context: &StringTable<'_>, offset: usize) -> Result<NsisString, Error> {
+    let table = context.bytes();
     let mut segments = Vec::new();
     let mut literal_chars: Vec<u16> = Vec::new();
     let mut pos = offset;
@@ -90,12 +91,22 @@ pub fn read_park_string(table: &[u8], offset: usize) -> Result<NsisString, Error
             match ch {
                 PARK_CODE_VAR => {
                     let index = n & 0x7FFF;
-                    segments.push(StringSegment::Variable(index));
+                    segments.push(StringSegment::Variable {
+                        index,
+                        name: context.variable_name(index),
+                    });
                 }
                 PARK_CODE_SHELL => {
-                    // Shell folder: low byte = folder ID, high byte = flags.
-                    let folder = n & 0xFF;
-                    segments.push(StringSegment::ShellFolder(folder));
+                    // Two folder ids, low byte first — the same packing NSIS 3
+                    // Unicode uses. Keeping only the low byte would discard the
+                    // fallback and mis-resolve folders whose primary id is not
+                    // in the table. Source: 7-Zip NsisIn.cpp:1056.
+                    let (primary, fallback) = ((n & 0xFF) as u8, (n >> 8) as u8);
+                    segments.push(StringSegment::ShellFolder {
+                        primary,
+                        fallback,
+                        target: context.shell_target(primary, fallback),
+                    });
                 }
                 PARK_CODE_LANG => {
                     let index = n & 0x7FFF;
@@ -120,6 +131,22 @@ pub fn read_park_string(table: &[u8], offset: usize) -> Result<NsisString, Error
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::strings::{
+        DEFAULT_INTERNAL_VARS, StringEncoding,
+        ansi::AnsiCodeRange,
+        testing::{shell_segment, variable_name_for},
+    };
+
+    /// Wraps raw table bytes in the context the decoder needs.
+    fn context(table: &[u8]) -> StringTable<'_> {
+        StringTable::new(
+            table,
+            0,
+            StringEncoding::Park,
+            AnsiCodeRange::Nsis3,
+            DEFAULT_INTERNAL_VARS,
+        )
+    }
 
     /// Builds a UTF-16LE byte sequence from u16 code units.
     fn encode_u16s(units: &[u16]) -> Vec<u8> {
@@ -134,7 +161,7 @@ mod tests {
     fn plain_ascii_string() {
         // "Hello" in UTF-16LE + null terminator
         let table = encode_u16s(&[0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x0000]);
-        let s = read_park_string(&table, 0).unwrap();
+        let s = read_park_string(&context(&table), 0).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert_eq!(s.segments[0], StringSegment::Literal("Hello".into()));
     }
@@ -151,9 +178,15 @@ mod tests {
             0x70, // \App
             0x0000,
         ]);
-        let s = read_park_string(&table, 0).unwrap();
+        let s = read_park_string(&context(&table), 0).unwrap();
         assert_eq!(s.segments.len(), 2);
-        assert_eq!(s.segments[0], StringSegment::Variable(21));
+        assert_eq!(
+            s.segments[0],
+            StringSegment::Variable {
+                index: 21,
+                name: variable_name_for(21)
+            }
+        );
         assert_eq!(s.segments[1], StringSegment::Literal("\\App".into()));
     }
 
@@ -161,16 +194,16 @@ mod tests {
     fn string_with_shell_folder() {
         // PARK_CODE_SHELL + 0x001A (CSIDL_APPDATA in low byte) + null
         let table = encode_u16s(&[PARK_CODE_SHELL, 0x001A, 0x0000]);
-        let s = read_park_string(&table, 0).unwrap();
+        let s = read_park_string(&context(&table), 0).unwrap();
         assert_eq!(s.segments.len(), 1);
-        assert_eq!(s.segments[0], StringSegment::ShellFolder(0x1A));
+        assert_eq!(s.segments[0], shell_segment(0x1A));
     }
 
     #[test]
     fn skip_code() {
         // PARK_CODE_SKIP + 0xE001 (should be literal, not treated as VAR) + null
         let table = encode_u16s(&[PARK_CODE_SKIP, PARK_CODE_VAR, 0x0000]);
-        let s = read_park_string(&table, 0).unwrap();
+        let s = read_park_string(&context(&table), 0).unwrap();
         assert_eq!(s.segments.len(), 1);
         // The PARK_CODE_VAR value should appear as a literal character.
         let lit = &s.segments[0];
@@ -180,7 +213,7 @@ mod tests {
     #[test]
     fn empty_string() {
         let table = encode_u16s(&[0x0000]);
-        let s = read_park_string(&table, 0).unwrap();
+        let s = read_park_string(&context(&table), 0).unwrap();
         assert!(s.is_empty());
     }
 
@@ -189,7 +222,7 @@ mod tests {
         // Characters >= 0x80 that are NOT park specials should be literal.
         // e.g. 'ä' = 0x00E4
         let table = encode_u16s(&[0x00E4, 0x0000]);
-        let s = read_park_string(&table, 0).unwrap();
+        let s = read_park_string(&context(&table), 0).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert_eq!(s.segments[0], StringSegment::Literal("ä".into()));
     }

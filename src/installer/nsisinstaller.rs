@@ -338,7 +338,7 @@ impl<'a> NsisInstaller<'a> {
                         strings::DEFAULT_INTERNAL_VARS,
                     );
                     match table.read(offset).ok()?.segments.as_slice() {
-                        [StringSegment::Variable(index)] => Some(*index),
+                        [StringSegment::Variable { index, .. }] => Some(*index),
                         _ => None,
                     }
                 },
@@ -741,7 +741,10 @@ impl<'a> NsisInstaller<'a> {
             match ptype {
                 ParamType::String => parts.push(format_param(name, self.format_string_param(val))),
                 ParamType::Variable => {
-                    parts.push(format_param(name, format_variable_param(val)));
+                    parts.push(format_param(
+                        name,
+                        format_variable_param(&self.string_table(), val),
+                    ));
                 }
                 ParamType::Jump => {
                     if val != 0 {
@@ -852,11 +855,19 @@ impl<'a> NsisInstaller<'a> {
             match ptype {
                 ParamType::String => parts.push(format_param(name, self.format_string_param(val))),
                 ParamType::Variable => {
-                    parts.push(format_param(name, format_variable_param(val)));
+                    parts.push(format_param(
+                        name,
+                        format_variable_param(&self.string_table(), val),
+                    ));
                 }
                 ParamType::Jump => {
                     if val != 0 {
-                        parts.push(format_symbolic_jump_param(name, val, analysis));
+                        parts.push(format_symbolic_jump_param(
+                            &self.string_table(),
+                            name,
+                            val,
+                            analysis,
+                        ));
                     }
                 }
                 ParamType::Int => {
@@ -909,7 +920,10 @@ impl<'a> NsisInstaller<'a> {
                 format!("op=Exch, index={}", offsets[2])
             }
         } else if offsets[1] != 0 {
-            format!("op=Pop, var={}", format_variable_param(offsets[0]))
+            format!(
+                "op=Pop, var={}",
+                format_variable_param(&self.string_table(), offsets[0])
+            )
         } else {
             format!("op=Push, value={}", self.format_string_param(offsets[0]))
         }
@@ -1203,15 +1217,20 @@ fn format_param(name: &str, value: String) -> String {
     }
 }
 
-fn format_variable_param(index: i32) -> String {
+fn format_variable_param(table: &StringTable<'_>, index: i32) -> String {
     if index >= 0 {
-        strings::variable_name(index as u16).into_owned()
+        table.variable_name(index as u16).into_owned()
     } else {
         index.to_string()
     }
 }
 
-fn format_symbolic_jump_param(name: &str, raw: i32, analysis: &ScriptAnalysis) -> String {
+fn format_symbolic_jump_param(
+    table: &StringTable<'_>,
+    name: &str,
+    raw: i32,
+    analysis: &ScriptAnalysis,
+) -> String {
     let value = if raw > 0 {
         let target = usize::try_from(raw)
             .ok()
@@ -1228,7 +1247,7 @@ fn format_symbolic_jump_param(name: &str, raw: i32, analysis: &ScriptAnalysis) -
             .checked_neg()
             .and_then(|value| value.checked_sub(1));
         match variable.and_then(|value| i32::try_from(value).ok()) {
-            Some(index) => format!("=>{}", format_variable_param(index)),
+            Some(index) => format!("=>{}", format_variable_param(table, index)),
             None => format!("=>invalid({raw})"),
         }
     } else {

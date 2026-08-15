@@ -20,7 +20,7 @@
 use crate::{
     error::Error,
     opcode::NsisVersion,
-    strings::{NsisString, StringSegment, decode_short},
+    strings::{NsisString, StringSegment, StringTable, decode_short},
 };
 
 /// NSIS 3.x ANSI special codes.
@@ -71,6 +71,11 @@ enum AnsiCode {
     Lang,
 }
 
+/// Returns `true` if `b` introduces a special code in the given range.
+pub(crate) fn is_special_code(b: u8, codes: AnsiCodeRange) -> bool {
+    classify_byte(b, codes) != AnsiCode::Literal
+}
+
 fn classify_byte(b: u8, codes: AnsiCodeRange) -> AnsiCode {
     match codes {
         AnsiCodeRange::Nsis3 => match b {
@@ -94,11 +99,9 @@ fn classify_byte(b: u8, codes: AnsiCodeRange) -> AnsiCode {
 ///
 /// The string starts at `offset` and continues until a null byte (`0x00`).
 /// `codes` selects the special-code range; bytes outside it are literal text.
-pub fn read_ansi_string(
-    table: &[u8],
-    offset: usize,
-    codes: AnsiCodeRange,
-) -> Result<NsisString, Error> {
+pub fn read_ansi_string(context: &StringTable<'_>, offset: usize) -> Result<NsisString, Error> {
+    let table = context.bytes();
+    let codes = context.ansi_code_range();
     let mut segments = Vec::new();
     let mut literal = String::new();
     let mut pos = offset;
@@ -127,20 +130,35 @@ pub fn read_ansi_string(
                 literal.clear();
             }
 
-            // Read the 2-byte coded short.
+            // Both argument bytes follow the code.
             let (Some(p1), Some(p2)) = (pos.checked_add(1), pos.checked_add(2)) else {
                 break;
             };
-            let (Some(&hi), Some(&lo)) = (table.get(p1), table.get(p2)) else {
+            let (Some(&first), Some(&second)) = (table.get(p1), table.get(p2)) else {
                 break;
             };
-            let val = decode_short(hi, lo);
             pos = pos.saturating_add(3);
 
             match code {
-                AnsiCode::Var => segments.push(StringSegment::Variable(val)),
-                AnsiCode::Shell => segments.push(StringSegment::ShellFolder(val)),
-                AnsiCode::Lang => segments.push(StringSegment::LangString(val)),
+                // Shell folder ids are two independent bytes. The 14-bit
+                // transform applies to numbers, and a folder pair is not one —
+                // running it through the transform mixes the fallback id into
+                // the primary. 7-Zip and Binary Refinery both pass the raw pair.
+                AnsiCode::Shell => segments.push(StringSegment::ShellFolder {
+                    primary: first,
+                    fallback: second,
+                    target: context.shell_target(first, second),
+                }),
+                AnsiCode::Var => {
+                    let index = decode_short(first, second);
+                    segments.push(StringSegment::Variable {
+                        index,
+                        name: context.variable_name(index),
+                    });
+                }
+                AnsiCode::Lang => {
+                    segments.push(StringSegment::LangString(decode_short(first, second)));
+                }
                 _ => {}
             }
         } else {
@@ -159,12 +177,18 @@ pub fn read_ansi_string(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::strings::encode_short;
+    use crate::strings::testing::variable_name_for;
+    use crate::strings::{DEFAULT_INTERNAL_VARS, ShellTarget, StringEncoding, encode_short};
+
+    /// Wraps raw table bytes in the context the decoder needs.
+    fn context(table: &[u8], codes: AnsiCodeRange) -> StringTable<'_> {
+        StringTable::new(table, 0, StringEncoding::Ansi, codes, DEFAULT_INTERNAL_VARS)
+    }
 
     #[test]
     fn plain_string() {
         let table = b"Hello World\0rest";
-        let s = read_ansi_string(table, 0, AnsiCodeRange::Nsis3).unwrap();
+        let s = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis3), 0).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert_eq!(s.segments[0], StringSegment::Literal("Hello World".into()));
     }
@@ -180,10 +204,16 @@ mod tests {
         table.push(b1);
         table.push(0);
 
-        let s = read_ansi_string(&table, 0, AnsiCodeRange::Nsis3).unwrap();
+        let s = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis3), 0).unwrap();
         assert_eq!(s.segments.len(), 2);
         assert_eq!(s.segments[0], StringSegment::Literal("Install to ".into()));
-        assert_eq!(s.segments[1], StringSegment::Variable(21));
+        assert_eq!(
+            s.segments[1],
+            StringSegment::Variable {
+                index: 21,
+                name: variable_name_for(21)
+            }
+        );
         assert_eq!(s.to_string(), "Install to $INSTDIR");
     }
 
@@ -198,10 +228,16 @@ mod tests {
         table.push(b1);
         table.push(0);
 
-        let s = read_ansi_string(&table, 0, AnsiCodeRange::Nsis2).unwrap();
+        let s = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis2), 0).unwrap();
         assert_eq!(s.segments.len(), 2);
         assert_eq!(s.segments[0], StringSegment::Literal("Dir: ".into()));
-        assert_eq!(s.segments[1], StringSegment::Variable(21));
+        assert_eq!(
+            s.segments[1],
+            StringSegment::Variable {
+                index: 21,
+                name: variable_name_for(21)
+            }
+        );
     }
 
     #[test]
@@ -215,13 +251,13 @@ mod tests {
             b'i', b'n', b'i', 0x00,
         ];
 
-        let first = read_ansi_string(&table, 0, AnsiCodeRange::Nsis3).unwrap();
+        let first = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis3), 0).unwrap();
         assert_eq!(
             first.segments,
             vec![StringSegment::Literal("gr\u{FC}\u{DF}e.txt".into())]
         );
 
-        let second = read_ansi_string(&table, 10, AnsiCodeRange::Nsis3).unwrap();
+        let second = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis3), 10).unwrap();
         assert_eq!(
             second.segments,
             vec![StringSegment::Literal("\u{FE}\u{FD}\u{FF}.ini".into())]
@@ -236,10 +272,16 @@ mod tests {
         let (b0, b1) = encode_short(21);
         let table = [0xFD, b0, b1, 0x00];
 
-        let as_nsis2 = read_ansi_string(&table, 0, AnsiCodeRange::Nsis2).unwrap();
-        assert_eq!(as_nsis2.segments, vec![StringSegment::Variable(21)]);
+        let as_nsis2 = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis2), 0).unwrap();
+        assert_eq!(
+            as_nsis2.segments,
+            vec![StringSegment::Variable {
+                index: 21,
+                name: variable_name_for(21)
+            }]
+        );
 
-        let as_nsis3 = read_ansi_string(&table, 0, AnsiCodeRange::Nsis3).unwrap();
+        let as_nsis3 = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis3), 0).unwrap();
         assert_eq!(
             as_nsis3.segments,
             vec![StringSegment::Literal(format!(
@@ -254,7 +296,7 @@ mod tests {
         // The mirror image: 0x01-0x04 are ordinary control characters in an
         // NSIS 2 table, and an NSIS 2 script can legitimately contain them.
         let table = [b'a', 0x03, 0x95, 0x80, b'b', 0x00];
-        let decoded = read_ansi_string(&table, 0, AnsiCodeRange::Nsis2).unwrap();
+        let decoded = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis2), 0).unwrap();
         assert_eq!(
             decoded.segments,
             vec![StringSegment::Literal("a\u{3}\u{95}\u{80}b".into())]
@@ -279,17 +321,43 @@ mod tests {
 
     #[test]
     fn nsis2_shell_folder() {
-        let (b0, b1) = encode_short(0x001A); // CSIDL_APPDATA
-        let mut table = Vec::new();
-        table.push(NS2_SHELL);
-        table.push(b0);
-        table.push(b1);
+        // The two folder ids follow the code as raw bytes, not as a coded
+        // number: 0x1A is CSIDL_APPDATA, 0x23 the common-profile equivalent
+        // used when the primary is unavailable.
+        let mut table = vec![NS2_SHELL, 0x1A, 0x23];
         table.extend_from_slice(b"\\MyApp\0");
 
-        let s = read_ansi_string(&table, 0, AnsiCodeRange::Nsis2).unwrap();
+        let s = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis2), 0).unwrap();
         assert_eq!(s.segments.len(), 2);
-        assert_eq!(s.segments[0], StringSegment::ShellFolder(0x001A));
+        assert_eq!(
+            s.segments[0],
+            StringSegment::ShellFolder {
+                primary: 0x1A,
+                fallback: 0x23,
+                target: ShellTarget::Csidl("APPDATA"),
+            }
+        );
         assert_eq!(s.segments[1], StringSegment::Literal("\\MyApp".into()));
+    }
+
+    #[test]
+    fn shell_ids_are_not_run_through_the_number_transform() {
+        // Regression: decoding the pair as a 14-bit number folds the fallback
+        // id into the primary, so `81 20` (a registry lookup) came out as
+        // CSIDL 1. Real data: the InstallDir of the ansi3_deflate_nonsolid
+        // fixture.
+        let table = vec![NS3_SHELL, 0x81, 0x20, 0x00];
+        let s = read_ansi_string(&context(&table, AnsiCodeRange::Nsis3), 0).unwrap();
+        match &s.segments[..] {
+            [
+                StringSegment::ShellFolder {
+                    primary, fallback, ..
+                },
+            ] => {
+                assert_eq!((*primary, *fallback), (0x81, 0x20));
+            }
+            other => panic!("expected one shell segment, got {other:?}"),
+        }
     }
 
     #[test]
@@ -300,7 +368,7 @@ mod tests {
         table.push(0x03); // literal 0x03
         table.extend_from_slice(b"B\0");
 
-        let s = read_ansi_string(&table, 0, AnsiCodeRange::Nsis3).unwrap();
+        let s = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis3), 0).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert_eq!(s.segments[0], StringSegment::Literal("A\x03B".into()));
     }
@@ -309,7 +377,7 @@ mod tests {
     fn nsis2_skip_code() {
         let table = vec![NS2_SKIP, NS2_VAR, 0]; // SKIP makes 0xFD literal
 
-        let s = read_ansi_string(&table, 0, AnsiCodeRange::Nsis2).unwrap();
+        let s = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis2), 0).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert_eq!(
             s.segments[0],
@@ -320,7 +388,7 @@ mod tests {
     #[test]
     fn string_at_offset() {
         let table = b"\0\0\0Hello\0";
-        let s = read_ansi_string(table, 3, AnsiCodeRange::Nsis3).unwrap();
+        let s = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis3), 3).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert_eq!(s.segments[0], StringSegment::Literal("Hello".into()));
     }
@@ -328,7 +396,7 @@ mod tests {
     #[test]
     fn empty_string() {
         let table = b"\0";
-        let s = read_ansi_string(table, 0, AnsiCodeRange::Nsis3).unwrap();
+        let s = read_ansi_string(&context(table.as_ref(), AnsiCodeRange::Nsis3), 0).unwrap();
         assert!(s.is_empty());
     }
 }

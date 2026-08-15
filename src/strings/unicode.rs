@@ -9,7 +9,7 @@
 
 use crate::{
     error::Error,
-    strings::{NsisString, StringSegment},
+    strings::{NsisString, StringSegment, StringTable},
 };
 
 /// NSIS 3.x Unicode special codes (as UTF-16LE code units).
@@ -42,7 +42,8 @@ fn decode_nsis3_arg(w: u16) -> u16 {
 ///
 /// The string starts at byte `offset` and continues until a null code unit
 /// (`0x0000`).
-pub fn read_unicode_string(table: &[u8], offset: usize) -> Result<NsisString, Error> {
+pub fn read_unicode_string(context: &StringTable<'_>, offset: usize) -> Result<NsisString, Error> {
+    let table = context.bytes();
     let mut segments = Vec::new();
     let mut literal_chars: Vec<u16> = Vec::new();
     let mut pos = offset;
@@ -82,14 +83,23 @@ pub fn read_unicode_string(table: &[u8], offset: usize) -> Result<NsisString, Er
             match ch {
                 NS_VAR_CODE_W => {
                     // Variables use the 14-bit coded conversion.
-                    segments.push(StringSegment::Variable(decode_nsis3_arg(arg)));
+                    let index = decode_nsis3_arg(arg);
+                    segments.push(StringSegment::Variable {
+                        index,
+                        name: context.variable_name(index),
+                    });
                 }
                 NS_SHELL_CODE_W => {
-                    // Shell folders use raw byte split: low = folder ID,
-                    // high = fallback. NOT the 14-bit conversion.
-                    // Source: 7-Zip NsisIn.cpp line 1023:
+                    // Two folder ids packed into the argument, low byte first.
+                    // Not the 14-bit conversion, which is for numbers.
+                    // Source: 7-Zip NsisIn.cpp:1022
                     //   GetShellString(Raw_AString, n & 0xFF, n >> 8)
-                    segments.push(StringSegment::ShellFolder(arg));
+                    let (primary, fallback) = ((arg & 0xFF) as u8, (arg >> 8) as u8);
+                    segments.push(StringSegment::ShellFolder {
+                        primary,
+                        fallback,
+                        target: context.shell_target(primary, fallback),
+                    });
                 }
                 NS_LANG_CODE_W => {
                     // Language codes use the 14-bit coded conversion.
@@ -114,6 +124,20 @@ pub fn read_unicode_string(table: &[u8], offset: usize) -> Result<NsisString, Er
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::strings::{
+        DEFAULT_INTERNAL_VARS, StringEncoding, ansi::AnsiCodeRange, testing::variable_name_for,
+    };
+
+    /// Wraps raw table bytes in the context the decoder needs.
+    fn context(table: &[u8]) -> StringTable<'_> {
+        StringTable::new(
+            table,
+            0,
+            StringEncoding::Unicode,
+            AnsiCodeRange::Nsis3,
+            DEFAULT_INTERNAL_VARS,
+        )
+    }
 
     /// Encodes a string as UTF-16LE bytes with a null terminator.
     fn encode_utf16(s: &str) -> Vec<u8> {
@@ -135,7 +159,7 @@ mod tests {
     #[test]
     fn plain_string() {
         let table = encode_utf16("Hello");
-        let s = read_unicode_string(&table, 0).unwrap();
+        let s = read_unicode_string(&context(&table), 0).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert_eq!(s.segments[0], StringSegment::Literal("Hello".into()));
     }
@@ -151,10 +175,16 @@ mod tests {
         table.extend_from_slice(&encode_nsis3_arg(21).to_le_bytes());
         table.extend_from_slice(&[0x00, 0x00]);
 
-        let s = read_unicode_string(&table, 0).unwrap();
+        let s = read_unicode_string(&context(&table), 0).unwrap();
         assert_eq!(s.segments.len(), 2);
         assert_eq!(s.segments[0], StringSegment::Literal("Dir: ".into()));
-        assert_eq!(s.segments[1], StringSegment::Variable(21));
+        assert_eq!(
+            s.segments[1],
+            StringSegment::Variable {
+                index: 21,
+                name: variable_name_for(21)
+            }
+        );
     }
 
     #[test]
@@ -168,7 +198,7 @@ mod tests {
     #[test]
     fn empty_string() {
         let table = [0x00, 0x00];
-        let s = read_unicode_string(&table, 0).unwrap();
+        let s = read_unicode_string(&context(&table), 0).unwrap();
         assert!(s.is_empty());
     }
 
@@ -179,7 +209,7 @@ mod tests {
         table.extend_from_slice(&0x0003u16.to_le_bytes());
         table.extend_from_slice(&[0x00, 0x00]);
 
-        let s = read_unicode_string(&table, 0).unwrap();
+        let s = read_unicode_string(&context(&table), 0).unwrap();
         assert_eq!(s.segments.len(), 1);
         assert!(matches!(&s.segments[0], StringSegment::Literal(_)));
     }
