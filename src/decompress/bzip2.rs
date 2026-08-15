@@ -47,6 +47,8 @@
 
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 
+use std::panic::{self, AssertUnwindSafe};
+
 use crate::{
     decompress::{DecodeLimit, Decoded},
     error::Error,
@@ -272,7 +274,7 @@ pub fn decompress_bzip2(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded
     // arithmetic overflow inside the vendored algorithm surfaces as a clean
     // `DecompressionFailed` error rather than aborting the calling worker.
     // See the module-level "Lint allowlist" doc for context.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    match panic::catch_unwind(AssertUnwindSafe(|| {
         decompress_bzip2_inner(compressed, limit)
     })) {
         Ok(result) => result,
@@ -628,6 +630,12 @@ fn decompress_block(
     // are encoded as 4 copies followed by a repeat count byte.
     let mut state_out_len: i32 = 0;
     let mut state_out_ch: u8 = 0;
+    // Whether `k0` holds a data byte still waiting to be emitted. It does not
+    // when the block's final BWT byte was consumed as a run's repeat count:
+    // that byte is metadata, and emitting it would inject a spurious byte into
+    // the output. `unRLE_obuf_to_output_FAST` in `decompress.c` expresses the
+    // same condition as `nblock_used == nblock + 1` before starting a new run.
+    let mut k0_pending = true;
 
     while nblock_used <= nblock {
         if output.len() >= max_output {
@@ -652,6 +660,10 @@ fn decompress_block(
         }
 
         // state_out_len == 0: process the next run.
+        if !k0_pending {
+            // The last BWT byte was a repeat count, not data. The block is done.
+            break;
+        }
         state_out_ch = k0;
         // Count consecutive equal bytes (up to 4).
         let mut count = 1;
@@ -701,10 +713,15 @@ fn decompress_block(
                         nblock_used += 1;
                         // k0 is the repeat count (0..255).
                         state_out_len = k0 as i32 + count;
-                        // Fetch next k0 for the next iteration.
+                        // Fetch next k0 for the next iteration. If the count was
+                        // the block's last byte there is nothing left to fetch,
+                        // and the count value in `k0` must not be mistaken for
+                        // data once this run has been emitted.
                         if nblock_used < nblock {
                             k0 = bz_get_fast(&tt, &mut t_pos);
                             nblock_used += 1;
+                        } else {
+                            k0_pending = false;
                         }
                         continue;
                     }

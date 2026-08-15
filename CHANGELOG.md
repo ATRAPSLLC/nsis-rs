@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (unmappable base-relocation RVA, plus a `.reloc` header claiming more bytes
   than the file holds) previously failed with a `Goblin` error. 7-Zip
   mis-detects the same Park stubs as plain PE files.
+- NSIS-bzip2 no longer emits an RLE repeat count as file data. When a block's
+  final BWT byte was consumed as a run's repeat count, that byte was re-emitted
+  as data, inserting one spurious byte and shifting every file stored after it.
+  Only streams of more than one block are affected — over ~900 KB of payload —
+  where it silently corrupted the extracted data.
 - Over-budget solid installers no longer report truncation as data corruption.
   The solid stream was decoded with `DecodeLimit::Truncate` and the outcome
   discarded, so every file past the cut failed with a bounds error
