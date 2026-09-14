@@ -16,7 +16,7 @@ pub mod page;
 pub mod section;
 
 pub use ctlcolors::CtlColors;
-pub use entry::{Entry, EntryIter};
+pub use entry::{Entry, EntryIter, MAX_ENTRY_OFFSETS};
 pub use langtable::LangTable;
 pub use page::{Page, PageIter, PageType};
 pub use section::{Section, SectionIter};

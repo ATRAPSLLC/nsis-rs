@@ -18,7 +18,7 @@ use crate::{
 /// This bounds the LZMA decoder *during* decompression (a true
 /// memory-exhaustion guard) rather than decoding fully and truncating
 /// afterward. When the budget is reached the partial bytes are kept,
-/// `overflowed` is set, and the write fails to stop the decoder — the caller
+/// `overflowed` is set, and the write fails to stop the decoder - the caller
 /// then either rejects ([`DecodeLimit::Capped`]) or keeps the truncated buffer
 /// ([`DecodeLimit::Truncate`]).
 struct LimitedWriter {
@@ -57,7 +57,7 @@ impl Write for LimitedWriter {
 /// # Arguments
 ///
 /// - `compressed`: the raw LZMA stream (properties byte + 4-byte dict size + data)
-/// - `limit`: how the output is bounded — see [`DecodeLimit`]. The
+/// - `limit`: how the output is bounded - see [`DecodeLimit`]. The
 ///   unknown-size variants ([`DecodeLimit::Capped`] / [`DecodeLimit::Truncate`])
 ///   set the header size to "unknown" and rely on the EOS marker; only
 ///   [`DecodeLimit::Exact`] writes a fixed size into the LZMA header.
@@ -128,7 +128,7 @@ pub fn decompress_lzma(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded,
             } else {
                 let msg = e.to_string();
                 // If we got data and the error is about trailing bytes, that's
-                // OK — the LZMA stream was fully decoded, just with leftover input.
+                // OK - the LZMA stream was fully decoded, just with leftover input.
                 if !writer.buf.is_empty() && msg.contains("more bytes are available") {
                     // Successfully decoded up to the EOS marker.
                 } else {
@@ -190,7 +190,7 @@ mod tests {
         // Regression: an `Exact` size larger than the true output (as the file
         // decompressor used to effectively pass) makes lzma-rs reject the early
         // EOS marker. This is exactly the failure that dropped real NSIS LZMA
-        // files from extraction — unknown-size streams must use `Capped`.
+        // files from extraction - unknown-size streams must use `Capped`.
         let result = decompress_lzma(NSIS_EOS_STREAM, DecodeLimit::Exact(64 * 1024 * 1024));
         assert!(
             result.is_err(),

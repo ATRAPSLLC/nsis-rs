@@ -2,7 +2,7 @@
 //!
 //! NSIS 1.x numbers its instructions differently from every later version: it
 //! has instructions 2.x dropped (`EW_SETSFCONTEXT`, `EW_IFREBOOTFLAG`), lacks
-//! ones 2.x added, and orders the parameters of several others differently —
+//! ones 2.x added, and orders the parameters of several others differently -
 //! `FileOpen` takes its output handle last where 2.x takes it first,
 //! `GetFileTime` takes its file first where 2.x takes it last. Reading a 1.x
 //! entry through the modern table therefore does not merely rename operands,
@@ -564,7 +564,7 @@ pub static OPCODES_V1: [OpcodeInfo; 66] = [
 /// Looks up an NSIS 1.x opcode.
 ///
 /// Returns `None` for an opcode outside the table, and for the two slots the
-/// 1.x compiler resolves before writing the file — `EW_GETLABELADDR` and
+/// 1.x compiler resolves before writing the file - `EW_GETLABELADDR` and
 /// `EW_GETFUNCTIONADDR` both become `EW_ASSIGNVAR`, so an entry claiming to be
 /// one means the block is not a 1.x entry block.
 pub fn lookup_v1(which: u32) -> Option<&'static OpcodeInfo> {
@@ -580,9 +580,9 @@ pub const EW_V1_GETLABELADDR: u32 = 64;
 /// Maps an NSIS 1.x opcode onto the canonical numbering this crate reports.
 ///
 /// `-1` marks an instruction NSIS 2.0 dropped. Those were folded into the
-/// general flag instructions — `IfErrors` and `IfRebootFlag` both became
+/// general flag instructions - `IfErrors` and `IfRebootFlag` both became
 /// `EW_IFFLAG`, `SetShellVarContext` and `SetRebootFlag` became `EW_SETFLAG`,
-/// and `IntCmpU` became `EW_INTCMP` with a flag — so there is no one opcode to
+/// and `IntCmpU` became `EW_INTCMP` with a flag - so there is no one opcode to
 /// map them to.
 ///
 /// Only the identity is canonicalised. Several instructions kept the name and
@@ -669,7 +669,7 @@ pub fn canonical_opcode(which: u32) -> i32 {
 /// Returns the operand layout of an NSIS 1.x instruction.
 ///
 /// As with later versions, one opcode can carry several script commands and
-/// pick between them with an operand — see
+/// pick between them with an operand - see
 /// [`opcode::param_layout`](crate::opcode::param_layout). 1.x selects them
 /// differently, so its rules live here.
 pub fn param_layout_v1(which: u32, info: &OpcodeInfo, values: &[i32; 6]) -> ParamLayout {

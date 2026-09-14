@@ -92,7 +92,7 @@ pub fn read_length_prefix(data: &[u8]) -> Result<(bool, u32), Error> {
 /// Detection heuristics:
 /// - LZMA: first byte is typically `0x5D` followed by 4-byte dictionary size
 /// - bzip2: first byte is `0x31` (NSIS custom bzip2 block header)
-/// - Deflate: fallback — try raw deflate decompression
+/// - Deflate: fallback - try raw deflate decompression
 pub fn detect_compression(data: &[u8]) -> CompressionMethod {
     if data.is_empty() {
         return CompressionMethod::None;
@@ -130,7 +130,7 @@ pub enum DecodeLimit {
     /// The size is unknown: decode to the natural end of stream; if the output
     /// would exceed `n`, fail with [`Error::OutputTooLarge`].
     ///
-    /// Used for extracted files and uninstaller overlays — an over-budget
+    /// Used for extracted files and uninstaller overlays - an over-budget
     /// artifact is rejected, never stored truncated.
     Capped(usize),
     /// The size is unknown: decode to the natural end of stream, but stop at
@@ -194,7 +194,7 @@ impl DecodeLimit {
 ///
 /// - `data`: the compressed bytes (after the 4-byte length prefix)
 /// - `method`: the compression algorithm to use
-/// - `limit`: how the output is bounded — see [`DecodeLimit`]
+/// - `limit`: how the output is bounded - see [`DecodeLimit`]
 ///
 /// # Returns
 ///
@@ -253,7 +253,7 @@ pub fn decompress_header(
     let size_usize = size as usize;
     let payload_end = 4_usize.checked_add(size_usize);
     if !is_compressed && payload_end.is_some_and(|end| end <= data.len()) {
-        // Data is uncompressed — just take the raw bytes.
+        // Data is uncompressed - just take the raw bytes.
         let bytes = data.get(4..).and_then(|s| s.get(..size_usize));
         if let Some(bytes) = bytes {
             return Ok((
@@ -280,7 +280,7 @@ pub fn decompress_header(
     // an [`DecodeLimit::Exact`] decode: take exactly that many bytes and ignore
     // any trailing input. Block-based codecs (deflate/bzip2) may decode a whole
     // block that overshoots the header, and LZMA frames may carry trailing
-    // bytes after the EOS marker — an exact bound sidesteps both.
+    // bytes after the EOS marker - an exact bound sidesteps both.
     let method = detect_compression(compressed_data);
     if let Ok(decoded) =
         decompress_block(compressed_data, method, DecodeLimit::Exact(expected_size))
@@ -365,7 +365,7 @@ fn strip_solid_prefix(data: Vec<u8>) -> Result<Vec<u8>, Error> {
     }
     let prefix = read_u32_le(&data, 0) as usize;
     if prefix == data.len().saturating_sub(4) {
-        // Prefix matches exactly — strip it.
+        // Prefix matches exactly - strip it.
         Ok(data.get(4..).unwrap_or(&[]).to_vec())
     } else {
         // Prefix doesn't match. This can happen if the data isn't actually

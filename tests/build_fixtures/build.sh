@@ -3,7 +3,7 @@
 #
 # Fixtures are compiled on a Windows host reachable over SSH, then downloaded
 # together with a 7-Zip listing that serves as ground truth for the parser
-# tests. Nothing about that host is baked in here — configure it with:
+# tests. Nothing about that host is baked in here - configure it with:
 #
 #   NSIS_BUILD_HOST   ssh destination, e.g. user@host or an ssh_config alias
 #   NSIS_BUILD_PORT   ssh port (default 22)
@@ -51,7 +51,7 @@ LOG_DIR="logs"
 
 # Which compiler builds which fixture. Anything unlisted uses NSIS 3.10.
 # Which executable in that directory compiles a fixture. NSIS 1.98's bzip2
-# build is a separate binary beside the zlib one, and produces solid output —
+# build is a separate binary beside the zlib one, and produces solid output -
 # its /HDRINFO reports NSIS_COMPRESS_USE_BZIP2 and NSIS_COMPRESS_WHOLE.
 compiler_exe_for() {
     case "$1" in
@@ -112,7 +112,7 @@ for name in "${targets[@]}"; do
         > "${LOG_DIR}/${name}.log" 2>&1; then
         scp "${SCP_PORT[@]}" -q "${NSIS_BUILD_HOST}:${REMOTE_DIR}\\${name}.exe" "${LOCAL_OUT}/${name}.exe"
     else
-        echo "    FAILED — see ${LOG_DIR}/${name}.log"
+        echo "    FAILED - see ${LOG_DIR}/${name}.log"
         failed+=("$name")
         continue
     fi
@@ -120,7 +120,7 @@ for name in "${targets[@]}"; do
     # Ground truth for the parser tests. 7-Zip mis-detects the larger Park
     # stubs as plain PE files, so those need an explicit archive type. It
     # cannot open an NSIS 1.x installer at all, so nsis1x's listing holds the
-    # refusal instead — that is the ground truth for it.
+    # refusal instead - that is the ground truth for it.
     listing_flags=(-slt -sccUTF-8)
     case "$name" in
         park2_unicode|park3_unicode) listing_flags+=(-tnsis) ;;

@@ -48,9 +48,9 @@ impl<'a> PeOverlay<'a> {
     /// Overlay detection needs only the optional header magic and the section
     /// table, so every optional structure is switched off and parsing runs in
     /// permissive mode. Installer stubs routinely carry auxiliary structures a
-    /// strict parser rejects — NSIS 2.03 stubs point their resource directory
+    /// strict parser rejects - NSIS 2.03 stubs point their resource directory
     /// past the appended data, and Park 2.46.2+ stubs declare base relocations
-    /// at an RVA that cannot be mapped — and failing on those would reject an
+    /// at an RVA that cannot be mapped - and failing on those would reject an
     /// installer whose NSIS data is perfectly intact.
     ///
     /// Pass these to [`PE::parse_with_opts`] when pre-parsing a PE
@@ -84,7 +84,7 @@ impl<'a> PeOverlay<'a> {
         // Sections whose raw range runs past the end of the file are skipped:
         // they cannot hold data the file does not contain, and taking their
         // claimed end would put the overlay beyond EOF and lose an installer
-        // that is otherwise intact. Park 2.46.2+ stubs do exactly this — their
+        // that is otherwise intact. Park 2.46.2+ stubs do exactly this - their
         // `.reloc` header claims 4096 bytes at an offset that leaves only ~1.5 KB
         // before EOF, with the NSIS FirstHeader sitting inside that claimed
         // range. 7-Zip mis-detects those same stubs as plain PE files.

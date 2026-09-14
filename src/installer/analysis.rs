@@ -82,15 +82,15 @@ pub fn hkey_name(root: i32) -> &'static str {
 /// Source: 7-Zip `NsisIn.cpp` lines 4560-4618.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegValueType {
-    /// `REG_SZ` — null-terminated string.
+    /// `REG_SZ` - null-terminated string.
     Str,
-    /// `REG_EXPAND_SZ` — string with `%ENVIRONMENT_VARIABLE%` expansion.
+    /// `REG_EXPAND_SZ` - string with `%ENVIRONMENT_VARIABLE%` expansion.
     ExpandStr,
-    /// `REG_BINARY` — arbitrary binary data.
+    /// `REG_BINARY` - arbitrary binary data.
     Bin,
-    /// `REG_DWORD` — 32-bit unsigned integer.
+    /// `REG_DWORD` - 32-bit unsigned integer.
     Dword,
-    /// `REG_MULTI_SZ` — sequence of null-terminated strings.
+    /// `REG_MULTI_SZ` - sequence of null-terminated strings.
     MultiStr,
     /// Unknown or unrecognized registry value type.
     Unknown(i32),
@@ -158,7 +158,7 @@ pub struct PluginCall<'a> {
 impl<'a> PluginCall<'a> {
     /// Returns the DLL file path.
     ///
-    /// Typically `$PLUGINSDIR\<name>.dll` — the plugin is extracted to the
+    /// Typically `$PLUGINSDIR\<name>.dll` - the plugin is extracted to the
     /// temp plugins directory and loaded from there.
     pub fn dll(&self) -> Result<NsisString, Error> {
         self.installer.read_string(self.entry.offset(0))
@@ -167,10 +167,10 @@ impl<'a> PluginCall<'a> {
     /// Returns the exported function name being called.
     ///
     /// Common values:
-    /// - `"Call"` — `System::Call` (arbitrary Win32 API invocation)
-    /// - `"Create"` — `nsDialogs::Create` (UI dialog creation)
-    /// - `"DllRegisterServer"` — standard COM registration
-    /// - `"DllUnregisterServer"` — standard COM unregistration
+    /// - `"Call"` - `System::Call` (arbitrary Win32 API invocation)
+    /// - `"Create"` - `nsDialogs::Create` (UI dialog creation)
+    /// - `"DllRegisterServer"` - standard COM registration
+    /// - `"DllUnregisterServer"` - standard COM unregistration
     pub fn function(&self) -> Result<NsisString, Error> {
         self.installer.read_string(self.entry.offset(1))
     }
@@ -200,17 +200,17 @@ impl<'a> PluginCall<'a> {
 /// An execution command found in the NSIS script.
 ///
 /// Covers two NSIS instructions:
-/// - [`ExecOp`]: `Exec` / `ExecWait` (`EW_EXECUTE`, opcode 41) — direct
+/// - [`ExecOp`]: `Exec` / `ExecWait` (`EW_EXECUTE`, opcode 41) - direct
 ///   process creation via `CreateProcess`.
-/// - [`ShellExecOp`]: `ExecShell` (`EW_SHELLEXEC`, opcode 40) — shell-based
+/// - [`ShellExecOp`]: `ExecShell` (`EW_SHELLEXEC`, opcode 40) - shell-based
 ///   execution via `ShellExecuteEx`.
 ///
 /// Both are used by malware to launch extracted payloads after decryption.
 #[derive(Debug)]
 pub enum ExecCommand<'a> {
-    /// `Exec` or `ExecWait` — direct process execution.
+    /// `Exec` or `ExecWait` - direct process execution.
     Exec(ExecOp<'a>),
-    /// `ExecShell` — shell-based file/URL execution.
+    /// `ExecShell` - shell-based file/URL execution.
     ShellExec(ShellExecOp<'a>),
 }
 
@@ -570,7 +570,7 @@ impl<'a> Uninstaller<'a> {
     pub fn data_offset(&self) -> i32 {
         // NSIS 1.x `WriteUninstaller` takes only a name and keeps this on the
         // header. Read as a 1.x instruction, the modern slot is an operand
-        // that does not exist and reads as 0 — the start of the data block.
+        // that does not exist and reads as 0 - the start of the data block.
         if let Some(offset) = self.installer.v1_uninstall_data_offset() {
             return offset;
         }
@@ -741,8 +741,8 @@ impl<'a> Uninstaller<'a> {
 /// One instruction from an installer's script, typed by what it does.
 ///
 /// Yielded by [`NsisInstaller::instructions`], which walks the entry stream
-/// once and classifies as it goes. The typed iterators — [`files`],
-/// [`plugin_calls`], [`registry_ops`] and the rest — are filters over this
+/// once and classifies as it goes. The typed iterators - [`files`],
+/// [`plugin_calls`], [`registry_ops`] and the rest - are filters over this
 /// walk, so a caller that wants several kinds of instruction can take them
 /// from a single pass instead of one pass each.
 ///
@@ -751,17 +751,17 @@ impl<'a> Uninstaller<'a> {
 /// [`registry_ops`]: NsisInstaller::registry_ops
 #[derive(Debug)]
 pub enum Instruction<'a> {
-    /// `EW_EXTRACTFILE` — an embedded file.
+    /// `EW_EXTRACTFILE` - an embedded file.
     File(ExtractedFile<'a>),
-    /// `EW_REGISTERDLL` — a plugin or DLL registration call.
+    /// `EW_REGISTERDLL` - a plugin or DLL registration call.
     PluginCall(PluginCall<'a>),
-    /// `EW_EXECUTE` or `EW_SHELLEXEC` — a command execution.
+    /// `EW_EXECUTE` or `EW_SHELLEXEC` - a command execution.
     Exec(ExecCommand<'a>),
-    /// `EW_WRITEREG`, `EW_DELREG` or `EW_READREGSTR` — a registry operation.
+    /// `EW_WRITEREG`, `EW_DELREG` or `EW_READREGSTR` - a registry operation.
     Registry(RegistryOp<'a>),
-    /// `EW_CREATESHORTCUT` — a shortcut.
+    /// `EW_CREATESHORTCUT` - a shortcut.
     Shortcut(Shortcut<'a>),
-    /// `EW_WRITEUNINSTALLER` — an embedded uninstaller stub.
+    /// `EW_WRITEUNINSTALLER` - an embedded uninstaller stub.
     Uninstaller(Uninstaller<'a>),
     /// Any other instruction, exposed as its raw entry.
     Other(Entry<'a>),
@@ -816,7 +816,7 @@ pub struct InstructionIter<'a> {
     /// The directory `SetOutPath` has most recently selected.
     ///
     /// NSIS resolves file destinations against this at install time, so
-    /// reconstructing it means replaying the instruction stream in order —
+    /// reconstructing it means replaying the instruction stream in order -
     /// which is why the walk, not the entry, carries it.
     out_dir: NsisString,
     /// The directory saved in `$_OUTDIR`, if a `StrCpy` put one there.
@@ -865,7 +865,7 @@ impl<'a> InstructionIter<'a> {
     /// Applies a `SetOutPath` to the current output directory.
     ///
     /// The target is usually a complete path, but it can be written relative to
-    /// the directory already in effect — `SetOutPath "$OUTDIR\extra"` — or to
+    /// the directory already in effect - `SetOutPath "$OUTDIR\extra"` - or to
     /// the one saved in `$_OUTDIR`. Both are resolved here, so the tracked
     /// directory is always a full path.
     fn set_out_path(&mut self, target: NsisString) {
@@ -914,8 +914,8 @@ impl<'a> InstructionIter<'a> {
 
     /// Returns the directory to record for a file with this name.
     ///
-    /// A name that already begins at a known root — `$INSTDIR`, `$PLUGINSDIR`,
-    /// a drive letter, a UNC share — names its own location, so the current
+    /// A name that already begins at a known root - `$INSTDIR`, `$PLUGINSDIR`,
+    /// a drive letter, a UNC share - names its own location, so the current
     /// output directory does not apply to it.
     fn out_dir_for(&self, name: &NsisString) -> Option<NsisString> {
         let is_rooted = match name.segments.first() {

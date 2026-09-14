@@ -11,7 +11,7 @@
 //! construction. Each has a `parse_too_short` test holding that up.
 //!
 //! A new view type must do the same. Reading a truncated structure through
-//! these helpers would not fail — it would report a field full of zeros, which
+//! these helpers would not fail - it would report a field full of zeros, which
 //! is indistinguishable from a real value and is exactly the kind of quiet
 //! wrongness this crate exists to avoid.
 

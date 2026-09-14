@@ -121,7 +121,7 @@ impl<'a> CommonHeader<'a> {
         // backwards. That is worth checking because it is what tells this
         // header apart from an NSIS 1.x one, which has no block table at all:
         // read as a block table, a 1.x header's string pointers are in range
-        // but arbitrary, and land out of order. Empty blocks are skipped —
+        // but arbitrary, and land out of order. Empty blocks are skipped -
         // nothing was written for them, so their offset means nothing.
         let mut lowest = 0u32;
         for (i, block) in blocks.iter().enumerate() {
@@ -320,7 +320,7 @@ impl<'a> CommonHeader<'a> {
     /// Returns the string offset of the default install directory, or `-1`.
     ///
     /// This is the `InstallDir` from the script, and typically the most
-    /// interesting string in the header — it is where the installer writes by
+    /// interesting string in the header - it is where the installer writes by
     /// default and usually begins with a shell folder such as `$PROGRAMFILES`.
     pub fn install_dir_ptr(&self) -> i32 {
         self.field_at(INSTALL_DIR_OFFSET).unwrap_or(-1)
@@ -446,7 +446,7 @@ mod tests {
     fn blocks_that_go_backwards_are_not_a_block_table() {
         // NSIS writes the blocks in this order, so their offsets never
         // decrease. When they do, these are not block descriptors: an NSIS 1.x
-        // header has no block table, and its string pointers land here — in
+        // header has no block table, and its string pointers land here - in
         // range, but arbitrary. A real 1.98 installer's header reads exactly
         // like this, with Sections behind Pages and Entries at 0.
         let mut blocks = [(0u32, 0i32); BLOCKS_NUM];
@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn an_empty_block_does_not_have_to_be_in_order() {
         // Nothing was written for an empty block, so its offset means nothing
-        // and must not be held to the ordering — an installer with no pages
+        // and must not be held to the ordering - an installer with no pages
         // still has a string table well past offset 0.
         let mut blocks = [(0u32, 0i32); BLOCKS_NUM];
         blocks[BlockType::Sections as usize] = (100, 2);
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn callbacks_default_to_minus_one_if_short() {
         let blocks = [(0, 0); BLOCKS_NUM];
-        // Only COMMON_HEADER_MIN_SIZE bytes — callback fields absent.
+        // Only COMMON_HEADER_MIN_SIZE bytes - callback fields absent.
         let data = vec![0u8; COMMON_HEADER_MIN_SIZE];
         // Manually set the flags.
         let mut data = data;

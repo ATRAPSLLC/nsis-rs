@@ -22,7 +22,7 @@ Section "Main"
   SetOutPath "$OUTDIR\extra"
   File /oname=nested.ini "config.ini"
 
-  ; 5. plain CreateDirectory — must NOT become a prefix for later files
+  ; 5. plain CreateDirectory - must NOT become a prefix for later files
   CreateDirectory "$SMPROGRAMS\DirsTest"
   SetOutPath "$INSTDIR\after"
   File /oname=after.txt "payload.txt"

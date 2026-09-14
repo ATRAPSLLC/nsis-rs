@@ -25,7 +25,7 @@
 //! # Builds that move these fields
 //!
 //! Almost every field in the struct is inside an `#ifdef`, so a makensis built
-//! with a different configuration produces a different — and smaller — header.
+//! with a different configuration produces a different - and smaller - header.
 //! A released 1.98 defines them all, which is what installers in the wild were
 //! built with. [`parse`](V1Header::parse) checks that the tables it derives
 //! actually fit the header it was handed, so a header laid out differently is
@@ -77,7 +77,7 @@ const CALLBACK_COUNT: usize = 8;
 ///
 /// Both start with the same 100-byte `common_header` and then diverge. An
 /// installer continues for another 140 bytes and is followed by a section
-/// table; an uninstaller continues for 20 and has no sections at all — its
+/// table; an uninstaller continues for 20 and has no sections at all - its
 /// code is one run of instructions named by `code` and `code_size`.
 ///
 /// Which one applies is not a guess: the FirstHeader says so, in the flag bit
@@ -136,7 +136,7 @@ impl<'a> V1Header<'a> {
     /// [`Error::InvalidBlockOffset`] if the section and entry counts describe
     /// tables that do not fit in it. Since nothing in the file says which
     /// generation wrote it, that second check is also what tells a 1.x header
-    /// apart from a 2.x one — see [`NsisInstaller`](crate::NsisInstaller).
+    /// apart from a 2.x one - see [`NsisInstaller`](crate::NsisInstaller).
     pub fn parse(data: &'a [u8], kind: V1HeaderKind) -> Result<Self, Error> {
         let size = kind.size();
         let bytes = data.get(..size).ok_or(Error::TooShort {
@@ -304,8 +304,8 @@ impl<'a> V1Header<'a> {
         self.installer_field(field::UNINSTDATA_OFFSET)
     }
 
-    /// Reads a field only an installer has, reporting `-1` — the value 1.x
-    /// uses for "not set" — when this is an uninstaller.
+    /// Reads a field only an installer has, reporting `-1` - the value 1.x
+    /// uses for "not set" - when this is an uninstaller.
     #[inline]
     fn installer_field(&self, offset: usize) -> i32 {
         match self.kind {
@@ -318,7 +318,7 @@ impl<'a> V1Header<'a> {
     ///
     /// In order: `.onInit`, `.onInstSuccess`, `.onInstFailed`, `.onUserAbort`,
     /// `.onNextPage`, `.onPrevPage`, `.onVerifyInstDir`, `.onSelChange`. The
-    /// two runs are not adjacent in the struct — the first five are shared
+    /// two runs are not adjacent in the struct - the first five are shared
     /// with uninstallers and the last three are installer-only.
     pub fn callbacks(&self) -> [i32; CALLBACK_COUNT] {
         let mut out = [-1; CALLBACK_COUNT];

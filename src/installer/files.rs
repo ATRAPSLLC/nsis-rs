@@ -35,7 +35,7 @@ use crate::{
 /// A single embedded file found in an NSIS installer.
 ///
 /// Provides zero-copy access to the file's metadata and raw data. The raw
-/// data slice borrows directly from the original file buffer — no copies
+/// data slice borrows directly from the original file buffer - no copies
 /// are made until you call [`decompress`](Self::decompress).
 ///
 /// # Data layout (non-solid mode)
@@ -53,8 +53,8 @@ use crate::{
 /// same as in non-solid mode.
 ///
 /// If the solid stream hit the decompression budget or failed to decode, the
-/// cache is short or empty. Files that fall past that point report the reason —
-/// [`Error::OutputTooLarge`] or the underlying decode error — rather than a
+/// cache is short or empty. Files that fall past that point report the reason -
+/// [`Error::OutputTooLarge`] or the underlying decode error - rather than a
 /// bounds error. See
 /// [`NsisInstaller::solid_status`](crate::installer::NsisInstaller::solid_status).
 #[derive(Debug)]
@@ -315,7 +315,7 @@ impl<'a> ExtractedFile<'a> {
     /// because the solid stream is incomplete.
     ///
     /// A bounds failure against a truncated or missing solid buffer says
-    /// nothing useful on its own — it reads like corrupt input. Where the
+    /// nothing useful on its own - it reads like corrupt input. Where the
     /// installer recorded why the stream is short, that reason is reported
     /// instead.
     fn solid_failure(&self) -> Option<Error> {

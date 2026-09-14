@@ -21,7 +21,7 @@ const STREAM_CHUNK: usize = 64 * 1024;
 /// # Arguments
 ///
 /// - `compressed`: the raw deflate stream (no zlib/gzip framing)
-/// - `limit`: how the output is bounded — see [`DecodeLimit`]
+/// - `limit`: how the output is bounded - see [`DecodeLimit`]
 ///
 /// # Returns
 ///
@@ -47,7 +47,7 @@ fn decompress_bounded(compressed: &[u8], limit: usize) -> Result<Decoded, Error>
     let mut output = vec![0u8; limit];
 
     // `BufError` here means the output buffer filled before the input was
-    // consumed — expected when more (unwanted) data follows the bounded
+    // consumed - expected when more (unwanted) data follows the bounded
     // region, so we keep what we decoded.
     let status = decompressor
         .decompress(compressed, &mut output, FlushDecompress::Finish)
@@ -61,7 +61,7 @@ fn decompress_bounded(compressed: &[u8], limit: usize) -> Result<Decoded, Error>
         Status::Ok | Status::StreamEnd | Status::BufError => {
             output.truncate(bytes_written);
             // `BufError` means the output buffer filled before the input was
-            // consumed — the stream had more to give than `limit` allowed.
+            // consumed - the stream had more to give than `limit` allowed.
             let truncated = status == Status::BufError;
             Ok(Decoded {
                 data: output,

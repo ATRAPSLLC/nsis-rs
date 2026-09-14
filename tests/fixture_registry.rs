@@ -79,8 +79,8 @@ enum GroundTruth {
     SevenZip,
     /// An explicit list, with the sizes makensis reported when building it.
     ///
-    /// 7-Zip cannot open an NSIS 1.x installer — it refuses both the fixture
-    /// and NSIS's own 1.98 distribution — so there is no listing to compare
+    /// 7-Zip cannot open an NSIS 1.x installer - it refuses both the fixture
+    /// and NSIS's own 1.98 distribution - so there is no listing to compare
     /// against and the build log is the only record of what the file holds.
     /// The `.7z.txt` for such a fixture holds 7-Zip's refusal instead, which is
     /// what makes the absence deliberate rather than an oversight.
@@ -299,7 +299,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         // NSIS 2 escapes literal 0xFC-0xFF with the SKIP code, so these decode
-        // correctly — the mirror image of `ansi3_latin1`.
+        // correctly - the mirror image of `ansi3_latin1`.
         name_defect: None,
         ground_truth: GroundTruth::SevenZip,
     },
@@ -635,7 +635,7 @@ fn every_fixture_has_a_ground_truth_listing() {
                 // that is what says no listing was possible.
                 assert!(
                     read_listing(fixture.name).is_empty(),
-                    "{}: 7-Zip can list this after all — use GroundTruth::SevenZip",
+                    "{}: 7-Zip can list this after all - use GroundTruth::SevenZip",
                     fixture.name
                 );
             }
@@ -685,7 +685,7 @@ fn declared_metadata_matches() {
             Some(defect) => assert_ne!(
                 inst.version(),
                 fixture.version,
-                "{name}: version detection now agrees with the compiler — the \
+                "{name}: version detection now agrees with the compiler - the \
                  recorded defect is fixed ({defect}); drop `version_defect` \
                  from the registry"
             ),
@@ -747,7 +747,7 @@ fn extracted_files_match_the_7zip_listing() {
             Some(defect) => {
                 assert_ne!(
                     our_paths, expected_paths,
-                    "{name}: names now agree with 7-Zip — the recorded defect is \
+                    "{name}: names now agree with 7-Zip - the recorded defect is \
                      fixed ({defect}); drop `name_defect` from the registry"
                 );
                 // Sizes are still checked below; only the names are affected.

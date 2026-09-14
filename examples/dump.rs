@@ -1,8 +1,8 @@
 //! NSIS installer dump and extraction tool.
 //!
 //! Usage:
-//!   `cargo run --example dump -- <installer.exe>`             — print info
-//!   `cargo run --example dump -- <installer.exe> --extract <outdir>` — extract files
+//!   `cargo run --example dump -- <installer.exe>`             - print info
+//!   `cargo run --example dump -- <installer.exe> --extract <outdir>` - extract files
 
 #![allow(
     clippy::unwrap_used,
@@ -93,7 +93,7 @@ fn main() {
                     println!("  {indent}[{i:3}] {name}{flags_str}");
                     group_depth += 1;
                 } else if s.is_section_group_end() {
-                    // Don't print the end marker — the dedent is enough.
+                    // Don't print the end marker - the dedent is enough.
                 } else if name.is_empty() && s.code_size() == 0 {
                     // Skip truly empty unnamed sections.
                 } else {
@@ -348,7 +348,7 @@ fn extract_files(installer: &NsisInstaller<'_>, outdir: &str) {
 
         // NSIS stores one copy of duplicated content and extracts it to
         // several destinations, so deduplicate by path rather than by data
-        // offset — the same payload legitimately lands in several places.
+        // offset - the same payload legitimately lands in several places.
         if !seen_paths.insert(path.clone()) {
             continue;
         }
@@ -374,7 +374,7 @@ fn extract_files(installer: &NsisInstaller<'_>, outdir: &str) {
                 }
             }
             Err(_) => {
-                // Decompression failed (e.g., solid mode) — write raw data if available.
+                // Decompression failed (e.g., solid mode) - write raw data if available.
                 let raw = file.data();
                 if !raw.is_empty() {
                     if let Err(e) = fs::write(&dest, raw) {

@@ -97,7 +97,7 @@ pub fn read_park_string(context: &StringTable<'_>, offset: usize) -> Result<Nsis
                     });
                 }
                 PARK_CODE_SHELL => {
-                    // Two folder ids, low byte first — the same packing NSIS 3
+                    // Two folder ids, low byte first - the same packing NSIS 3
                     // Unicode uses. Keeping only the low byte would discard the
                     // fallback and mis-resolve folders whose primary id is not
                     // in the table. Source: 7-Zip NsisIn.cpp:1056.

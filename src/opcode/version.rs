@@ -131,7 +131,7 @@ impl NsisVersion {
     ///
     /// 1. A legacy `"nsisinstall"` signature means NSIS 1.x.
     /// 2. Park's private-use special codes mean the Park fork.
-    /// 3. A UTF-16LE table means NSIS 3.x — NSIS 2 has no Unicode build.
+    /// 3. A UTF-16LE table means NSIS 3.x - NSIS 2 has no Unicode build.
     /// 4. An ANSI table means NSIS 2.x *or* an NSIS 3 build that omitted
     ///    `Unicode true`. The two are told apart by which special-code range
     ///    the table uses; see [`strings::detect_ansi_nsis3`].
