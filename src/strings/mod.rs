@@ -48,7 +48,7 @@ impl fmt::Display for StringEncoding {
 ///
 /// - **ANSI** (NSIS 2.x and 3.x ANSI builds): Single-byte characters.
 ///   String index 0 is a single `0x00` null, so `byte[0]=0, byte[1]!=0`.
-///   Special codes are `0x01-0x04` (NSIS 3) or `0xFC-0xFF` (NSIS 2) —
+///   Special codes are `0x01-0x04` (NSIS 3) or `0xFC-0xFF` (NSIS 2) -
 ///   the ANSI reader handles both transparently.
 ///
 /// - **Unicode** (NSIS 3.x Unicode builds): UTF-16LE characters.
@@ -76,7 +76,7 @@ pub fn detect_encoding(string_table: &[u8]) -> StringEncoding {
         return StringEncoding::Ansi;
     }
 
-    // First two bytes are 0x00 0x00 — this is a UTF-16LE string table.
+    // First two bytes are 0x00 0x00 - this is a UTF-16LE string table.
     // Scan for the first special code to distinguish NSIS 3 Unicode from Park.
     let limit = string_table.len().min(4096) & !1;
     for i in (2..limit).step_by(2) {
@@ -97,7 +97,7 @@ pub fn detect_encoding(string_table: &[u8]) -> StringEncoding {
         }
     }
 
-    // No special codes found — default to Unicode (more common than Park).
+    // No special codes found - default to Unicode (more common than Park).
     StringEncoding::Unicode
 }
 
@@ -164,7 +164,7 @@ pub fn encode_short(value: u16) -> (u8, u8) {
 
 /// A segment of a decoded NSIS string.
 ///
-/// NSIS strings are not plain text — they contain embedded references to
+/// NSIS strings are not plain text - they contain embedded references to
 /// variables, shell folders, and language strings that are resolved at
 /// install time.
 ///
@@ -257,7 +257,7 @@ pub enum ShellTarget {
 /// deliberately preserve. Reaching for `to_string()` on a path is almost always
 /// the wrong choice.
 ///
-/// This applies to every path-shaped value in the crate —
+/// This applies to every path-shaped value in the crate -
 /// [`ExtractedFile::dest_path`](crate::installer::ExtractedFile::dest_path),
 /// [`NsisInstaller::install_dir`](crate::installer::NsisInstaller::install_dir),
 /// [`Shortcut::link_path`](crate::installer::Shortcut::link_path),
@@ -281,7 +281,7 @@ impl NsisString {
     ///
     /// | Reference | Mapped to |
     /// |----------|-----------|
-    /// | `$INSTDIR`, `$OUTDIR` | *(extraction root — no prefix)* |
+    /// | `$INSTDIR`, `$OUTDIR` | *(extraction root - no prefix)* |
     /// | `$PLUGINSDIR` | `_plugins` |
     /// | `$TEMP` | `_temp` |
     /// | `$EXEDIR` | `_exedir` |
@@ -308,7 +308,7 @@ impl NsisString {
     ///
     /// Variable and shell-folder references are kept verbatim (`$INSTDIR`,
     /// `$PLUGINSDIR`, `$DESKTOP`), separators stay as backslashes, and nothing
-    /// is sanitised — this is a faithful reproduction of the path the
+    /// is sanitised - this is a faithful reproduction of the path the
     /// installer would write to, matching what 7-Zip lists for the same
     /// archive.
     ///
@@ -433,7 +433,7 @@ fn reduce_install_path(rendered: &str) -> &str {
 /// Appends `rendered` to `out` as a relative, traversal-free path.
 ///
 /// Splits on both separators so a path that mixes them is handled, drops empty
-/// and `.` components, rewrites `..`, and skips a leading drive letter — on
+/// and `.` components, rewrites `..`, and skips a leading drive letter - on
 /// Windows, joining an absolute path onto an output directory discards the
 /// output directory entirely, which would let an installer write anywhere.
 fn sanitize_extraction_path(rendered: &str, out: &mut String) {
@@ -601,7 +601,7 @@ impl<'a> StringTable<'a> {
     ///
     /// `base` is the byte offset of the string block within `data`, and
     /// `internal_vars` the number of built-in variables in the installer's
-    /// layout — [`Nsis2SubVersion::internal_var_count`] for an NSIS 2
+    /// layout - [`Nsis2SubVersion::internal_var_count`] for an NSIS 2
     /// installer, [`DEFAULT_INTERNAL_VARS`] otherwise.
     ///
     /// [`Nsis2SubVersion::internal_var_count`]: crate::opcode::Nsis2SubVersion::internal_var_count
@@ -657,8 +657,8 @@ impl<'a> StringTable<'a> {
 
     /// Reads the string at a TCHAR offset.
     ///
-    /// String references inside NSIS structures — section `name_ptr` fields,
-    /// entry parameter slots — are character indices rather than byte offsets,
+    /// String references inside NSIS structures - section `name_ptr` fields,
+    /// entry parameter slots - are character indices rather than byte offsets,
     /// so the offset is scaled by [`char_size`](Self::char_size). A negative
     /// offset is not a reference at all and yields an empty string.
     ///
@@ -682,7 +682,7 @@ impl<'a> StringTable<'a> {
     ///
     /// NSIS 1 numbers its variables differently from every later version, so
     /// the index of a built-in is a property of the table rather than a
-    /// constant — see [`strings::v1`](crate::strings::v1).
+    /// constant - see [`strings::v1`](crate::strings::v1).
     #[inline]
     pub fn var_instdir(&self) -> u16 {
         self.layout_var(VAR_INSTDIR, v1::V1_VAR_INSTDIR)
@@ -707,7 +707,7 @@ impl<'a> StringTable<'a> {
     }
 
     /// Returns the index of `$PLUGINSDIR`, or `None` for NSIS 1, which has no
-    /// such variable — it predates plugins.
+    /// such variable - it predates plugins.
     #[inline]
     pub fn var_pluginsdir(&self) -> Option<u16> {
         (self.ansi_codes != AnsiCodeRange::Nsis1).then_some(VAR_PLUGINSDIR)
@@ -789,7 +789,7 @@ impl<'a> StringTable<'a> {
     /// Reads the plain text of the string at a TCHAR offset, stopping at the
     /// first special code.
     ///
-    /// Used where a string is known to be plain data — a registry value name —
+    /// Used where a string is known to be plain data - a registry value name -
     /// and following its references would be neither meaningful nor safe.
     fn read_literal(&self, offset: i32) -> String {
         if offset < 0 {
@@ -813,11 +813,8 @@ impl<'a> StringTable<'a> {
                 }
             }
             StringEncoding::Unicode | StringEncoding::Park => {
-                for pair in rest.chunks_exact(2) {
-                    let unit = u16::from_le_bytes([
-                        pair.first().copied().unwrap_or(0),
-                        pair.get(1).copied().unwrap_or(0),
-                    ]);
+                for pair in rest.as_chunks::<2>().0 {
+                    let unit = u16::from_le_bytes(*pair);
                     if unit == 0 || unit <= 0x0004 || (0xE000..=0xE003).contains(&unit) {
                         break;
                     }
@@ -1019,7 +1016,7 @@ static SHELL_FOLDER_NAMES: &[Option<&str>] = &[
 /// Renders a resolved shell folder the way a decompiled script would show it.
 ///
 /// Registry-backed folders need the string table to resolve, so this takes an
-/// already-resolved [`ShellTarget`] — see [`StringTable::shell_target`]. The
+/// already-resolved [`ShellTarget`] - see [`StringTable::shell_target`]. The
 /// raw ids are only used for the unresolved form.
 ///
 /// Source: 7-Zip `NsisIn.cpp` `GetShellString`.
@@ -1038,8 +1035,8 @@ pub fn csidl_name(id: u8) -> Option<&'static str> {
 
 /// Appends a shell-folder reference to `out` in the given style.
 ///
-/// Splits the raw value the way NSIS encodes it — primary CSIDL in the low
-/// byte, fallback in the high byte — and resolves the first of the two that
+/// Splits the raw value the way NSIS encodes it - primary CSIDL in the low
+/// byte, fallback in the high byte - and resolves the first of the two that
 /// names a known folder. Writing straight into the caller's buffer keeps path
 /// rendering allocation-free.
 fn write_shell_folder(
@@ -1154,7 +1151,7 @@ mod tests {
             detect_encoding(&[0x41, 0x42, 0x43, 0x00]),
             StringEncoding::Ansi
         );
-        // NSIS 2 ANSI: \0 followed by 0xFE (NS2_SHELL_CODE) — still ANSI, not Park.
+        // NSIS 2 ANSI: \0 followed by 0xFE (NS2_SHELL_CODE) - still ANSI, not Park.
         assert_eq!(
             detect_encoding(&[0x00, 0xFE, 0x1A, 0x23]),
             StringEncoding::Ansi

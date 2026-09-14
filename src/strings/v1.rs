@@ -86,7 +86,7 @@ pub const V1_VAR_TEMP: u16 = 31;
 /// Returns the name NSIS 1.x gives a variable index.
 ///
 /// An index past the list is rendered as `$_N_`, matching how this crate names
-/// user-defined variables elsewhere — though 1.x has none, so it only happens
+/// user-defined variables elsewhere - though 1.x has none, so it only happens
 /// for a byte this crate does not recognise.
 pub fn variable_name_v1(index: u16) -> Cow<'static, str> {
     match V1_VARIABLES.get(index as usize) {

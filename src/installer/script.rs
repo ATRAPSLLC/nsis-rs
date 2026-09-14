@@ -336,6 +336,41 @@ pub enum ControlFlowTarget {
     Invalid(i32),
 }
 
+impl ControlFlowTarget {
+    /// Decodes a raw target operand.
+    ///
+    /// The one place the encoding is read, so a consumer outside this crate
+    /// cannot arrive at a different answer for the same operand. NSIS writes a
+    /// branch target three ways in one `i32` field and the sign is the
+    /// discriminator:
+    ///
+    /// - **positive** is a one-based entry index, so `5` is entry 4. An index
+    ///   past `entry_count` is [`Invalid`](Self::Invalid) rather than clamped:
+    ///   a target outside the script is a malformed operand, not a jump to the
+    ///   end.
+    /// - **negative** is a *variable*, as `-(var + 1)`, so `-22` is variable 21.
+    ///   The target is computed at run time and no static index exists.
+    /// - **zero** is the absent target some opcodes encode.
+    #[must_use]
+    pub fn resolve(raw: i32, entry_count: usize) -> Self {
+        if raw > 0 {
+            return positive_index(raw, entry_count)
+                .map(Self::Entry)
+                .unwrap_or(Self::Invalid(raw));
+        }
+        if raw < 0 {
+            let variable = i64::from(raw)
+                .checked_neg()
+                .and_then(|value| value.checked_sub(1));
+            return variable
+                .and_then(|value| u16::try_from(value).ok())
+                .map(Self::DynamicVariable)
+                .unwrap_or(Self::Invalid(raw));
+        }
+        Self::None
+    }
+}
+
 /// Non-fatal diagnostic emitted during script analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptAnalysisDiagnostic {
@@ -589,7 +624,7 @@ fn classify_opcode(opcode: i32, entry: &Entry<'_>, index: usize, entry_count: us
                     source_entry: index,
                     operand: Some(0),
                     kind: EdgeKind::Jump,
-                    target: resolve_target(entry.offset(0), entry_count),
+                    target: ControlFlowTarget::resolve(entry.offset(0), entry_count),
                 });
                 starts_next_block = true;
             }
@@ -776,7 +811,7 @@ fn add_branch(
             .map(ControlFlowTarget::Entry)
             .unwrap_or(ControlFlowTarget::Exit)
     } else {
-        resolve_target(raw, entry_count)
+        ControlFlowTarget::resolve(raw, entry_count)
     };
     edges.push(PendingEdge {
         source_entry: index,
@@ -790,26 +825,8 @@ fn resolve_call_target(raw: i32, entry_count: usize) -> ControlFlowTarget {
     if raw == 0 {
         ControlFlowTarget::None
     } else {
-        resolve_target(raw, entry_count)
+        ControlFlowTarget::resolve(raw, entry_count)
     }
-}
-
-fn resolve_target(raw: i32, entry_count: usize) -> ControlFlowTarget {
-    if raw > 0 {
-        return positive_index(raw, entry_count)
-            .map(ControlFlowTarget::Entry)
-            .unwrap_or(ControlFlowTarget::Invalid(raw));
-    }
-    if raw < 0 {
-        let variable = i64::from(raw)
-            .checked_neg()
-            .and_then(|value| value.checked_sub(1));
-        return variable
-            .and_then(|value| u16::try_from(value).ok())
-            .map(ControlFlowTarget::DynamicVariable)
-            .unwrap_or(ControlFlowTarget::Invalid(raw));
-    }
-    ControlFlowTarget::None
 }
 
 fn positive_index(raw: i32, entry_count: usize) -> Option<usize> {
@@ -1121,12 +1138,18 @@ mod tests {
 
     #[test]
     fn target_resolution_distinguishes_static_dynamic_and_invalid() {
-        assert_eq!(resolve_target(5, 10), ControlFlowTarget::Entry(4));
         assert_eq!(
-            resolve_target(-22, 10),
+            ControlFlowTarget::resolve(5, 10),
+            ControlFlowTarget::Entry(4)
+        );
+        assert_eq!(
+            ControlFlowTarget::resolve(-22, 10),
             ControlFlowTarget::DynamicVariable(21)
         );
-        assert_eq!(resolve_target(0, 10), ControlFlowTarget::None);
-        assert_eq!(resolve_target(20, 10), ControlFlowTarget::Invalid(20));
+        assert_eq!(ControlFlowTarget::resolve(0, 10), ControlFlowTarget::None);
+        assert_eq!(
+            ControlFlowTarget::resolve(20, 10),
+            ControlFlowTarget::Invalid(20)
+        );
     }
 }

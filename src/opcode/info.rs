@@ -72,7 +72,7 @@ const SECTION_PROPERTIES: [&str; 6] = [
 /// Rendering a form-selecting opcode from its fixed layout does not merely
 /// mislabel operands, it loses them: `SectionSetText` keeps its text in the
 /// fifth slot, which the fixed layout marks unused, and `LogSet` keeps an
-/// on/off flag where `LogText` keeps a string offset — read as a string, that
+/// on/off flag where `LogText` keeps a string offset - read as a string, that
 /// flag resolves to whatever text happens to sit at offset 1. The forms and
 /// slot assignments below follow 7-Zip's `NsisIn.cpp`.
 pub fn param_layout(which: u32, info: &OpcodeInfo, values: &[i32; 6]) -> ParamLayout {
@@ -128,6 +128,32 @@ pub fn param_layout(which: u32, info: &OpcodeInfo, values: &[i32; 6]) -> ParamLa
                 }
             }
         }
+        crate::opcode::EW_PUSHPOP => {
+            // One opcode, three script commands, chosen by which slot carries
+            // something. Described here beside the other multi-command opcodes:
+            // the renderer used to decide the command in a formatter of its
+            // own, so the *types* of a Pop's operands were never stated - and a
+            // consumer reading the layout to decide what a slot means, as the
+            // disassembler does, saw a Push's `String` for all three forms. The
+            // renderer still words these lines itself, but reads the command
+            // from here.
+            layout.names = ["value", "", "op", "", "", ""];
+            layout.types = [String, Unused, Int, Unused, Unused, Unused];
+            layout.count = 1;
+            if values[2] != 0 {
+                // Exch takes neither a value nor a variable: the depth is the
+                // whole operand, and it prints only when it is not 1.
+                layout.names = ["", "", "index", "", "", ""];
+                layout.types = [Unused, Unused, Int, Unused, Unused, Unused];
+                layout.count = 3;
+            } else if values[1] != 0 {
+                // Pop writes into a variable, which is the one form whose first
+                // slot is not a string offset.
+                layout.names = ["var", "op", "", "", "", ""];
+                layout.types = [Variable, Int, Unused, Unused, Unused, Unused];
+                layout.count = 2;
+            }
+        }
         crate::opcode::EW_INSTTYPESET => {
             // Two independent flags select between four script commands.
             let current = values[3] != 0;
@@ -181,7 +207,7 @@ pub struct OpcodeInfo {
 /// The opcode table.
 ///
 /// Indices are the `which` field of an entry, in the layout a standard
-/// makensis produces — NSIS 2 and NSIS 3 number their instructions the same
+/// makensis produces - NSIS 2 and NSIS 3 number their instructions the same
 /// way. What varies is which instructions a build *has*: a build compiled with
 /// logging adds one, the Park fork adds three, and the two UTF-16 file
 /// commands exist only in a Unicode build. Those shift the stored numbering,
@@ -788,7 +814,7 @@ pub static OPCODES: [OpcodeInfo; 72] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::opcode::{EW_INSTTYPESET, EW_LOG, EW_SECTIONSET, lookup};
+    use crate::opcode::{EW_INSTTYPESET, EW_LOG, EW_PUSHPOP, EW_SECTIONSET, lookup};
 
     /// Resolves the layout for an instruction with the given operands.
     fn layout_of(which: i32, values: [i32; 6]) -> ParamLayout {
@@ -897,10 +923,39 @@ mod tests {
         assert_eq!(slots(&get_cur)[0], ("", ParamType::Unused));
     }
 
+    /// **`EW_PUSHPOP` is three commands, and the layout says which.**
+    ///
+    /// Its fixed metadata names the slots `var_or_str`, `pop_or_push` and
+    /// `exch` - names that admit the slot means different things and then leave
+    /// a reader to guess which. The renderer did not guess: it had a formatter
+    /// of its own. Every *other* consumer of the layout did, and the
+    /// disassembler's guess was "always a string offset", so a `Pop`'s
+    /// destination variable was read as a string.
+    #[test]
+    fn pushpop_states_which_of_its_three_commands_an_entry_is() {
+        let slot = |values: [i32; 6], at: usize| {
+            let layout = layout_of(EW_PUSHPOP, values);
+            slots(&layout)[at]
+        };
+
+        // Push: slot 0 is the value, as a string offset.
+        assert_eq!(slot([42, 0, 0, 0, 0, 0], 0), ("value", ParamType::String));
+
+        // Pop: slot 0 is the destination *variable*, not a string.
+        assert_eq!(slot([3, 1, 0, 0, 0, 0], 0), ("var", ParamType::Variable));
+
+        // Exch: neither - the depth is the whole operand.
+        assert_eq!(slot([0, 0, 2, 0, 0, 0], 0), ("", ParamType::Unused));
+        assert_eq!(slot([0, 0, 2, 0, 0, 0], 2), ("index", ParamType::Int));
+    }
+
     #[test]
     fn opcodes_without_forms_keep_their_fixed_layout() {
         for (i, info) in OPCODES.iter().enumerate() {
-            if matches!(i as i32, EW_LOG | EW_SECTIONSET | EW_INSTTYPESET) {
+            if matches!(
+                i as i32,
+                EW_LOG | EW_SECTIONSET | EW_INSTTYPESET | EW_PUSHPOP
+            ) {
                 continue;
             }
             let layout = param_layout(i as u32, info, &[1; 6]);

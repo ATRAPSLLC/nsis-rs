@@ -14,10 +14,11 @@
 use nsis::{
     Error, Instruction, NsisInstaller, SolidStatus,
     header::firstheader::FirstHeader,
+    nsis::Entry,
     opcode::{
         EW_CALL, EW_FGETWS, EW_FINDPROC, EW_FPUTWS, EW_GETOSINFO, EW_INSTTYPESET,
-        EW_INVALID_OPCODE, EW_LOCKWINDOW, EW_LOG, EW_RET, EW_SECTIONSET, EW_WRITEUNINSTALLER,
-        NsisVersion,
+        EW_INVALID_OPCODE, EW_LOCKWINDOW, EW_LOG, EW_PUSHPOP, EW_RET, EW_SECTIONSET,
+        EW_WRITEUNINSTALLER, NsisVersion,
     },
     strings::{ShellTarget, StringEncoding, StringSegment},
 };
@@ -608,8 +609,8 @@ fn bzip2_file_extraction_solid() {
 fn bzip2_solid_data_is_not_padded_to_the_budget() {
     // Regression: the NSIS-bzip2 output loop never terminated at the end of a
     // block, so it emitted `0x0A` filler until the decompression budget was
-    // reached. This 38 KB installer yielded 67,104,886 bytes of solid data —
-    // the whole 64 MiB default budget — instead of 89.
+    // reached. This 38 KB installer yielded 67,104,886 bytes of solid data -
+    // the whole 64 MiB default budget - instead of 89.
     let inst = parse_fixture("bzip2_solid.exe");
     let solid = inst.solid_data();
 
@@ -723,7 +724,7 @@ fn truncated_solid_decompress_reports_the_budget() {
 }
 
 /// Copies a fixture and corrupts the tail of its solid stream, leaving the
-/// header region — which decodes with an exact bound and stops early — intact.
+/// header region - which decodes with an exact bound and stops early - intact.
 fn fixture_with_corrupt_solid_tail(name: &str) -> Vec<u8> {
     let mut data = fixture_bytes(name).to_vec();
     let inst = parse_fixture(name);
@@ -897,7 +898,7 @@ fn latin1_names_do_not_look_like_nsis2_variable_codes() {
     // `ansi3_latin1` stores `grüße.txt` and `þýÿ.ini`, whose bytes fall in the
     // NSIS 2 special-code range 0xFC-0xFF. Version detection keys off the
     // NSIS 3 code range instead, so those literals cannot drag it back to
-    // NSIS 2 — the trap that a byte-frequency heuristic would fall into.
+    // NSIS 2 - the trap that a byte-frequency heuristic would fall into.
     let inst = parse_fixture("ansi3_latin1.exe");
     assert_eq!(inst.version(), NsisVersion::V3);
 
@@ -910,7 +911,7 @@ fn latin1_names_do_not_look_like_nsis2_variable_codes() {
 fn latin1_file_names_decode_intact_in_both_ansi_ranges() {
     // The same script compiled by makensis 3.10 (ANSI) and makensis 2.46. NSIS 3
     // writes `0xFC-0xFF` as literal text, NSIS 2 escapes them with its SKIP
-    // code — so the two fixtures exercise opposite halves of the decoder and
+    // code - so the two fixtures exercise opposite halves of the decoder and
     // must produce identical names.
     for name in ["ansi3_latin1.exe", "nsis246_ansi_latin1.exe"] {
         let inst = parse_fixture(name);
@@ -1307,7 +1308,7 @@ fn nsis1x_is_read_through_its_own_layout() {
     // NSIS 1.x has no block table, no page or language blocks, 20-byte
     // sections and 24-byte instructions. Read as 2.x, the header's string
     // pointers land on the block descriptors and the file does not parse at
-    // all — which is what it used to do.
+    // all - which is what it used to do.
     let inst = parse_fixture("nsis1x.exe");
     assert_eq!(inst.version(), NsisVersion::V1);
     assert_eq!(inst.string_encoding(), StringEncoding::Ansi);
@@ -1378,7 +1379,7 @@ fn nsis1x_variables_are_one_byte_each() {
 #[test]
 fn nsis1x_bzip2_is_solid_and_decodes() {
     // NSIS 1.98 picks its compressor when makensis is built, so the bzip2
-    // compiler is a second binary — and it was built with NSIS_COMPRESS_WHOLE,
+    // compiler is a second binary - and it was built with NSIS_COMPRESS_WHOLE,
     // making its output solid too. 1.x bzip2 keeps standard bzip2's per-block
     // randomised flag, which NSIS 2.0 dropped; read under the 2.x layout every
     // block is one bit out of alignment and nothing decodes at all.
@@ -1408,8 +1409,8 @@ fn nsis1x_bzip2_is_solid_and_decodes() {
 fn a_nsis1x_uninstaller_round_trips() {
     // NSIS 1.x WriteUninstaller takes only a name; where the uninstaller data
     // lives is a header field, because 1.x has nowhere else to put it. Read as
-    // a 2.x instruction that operand does not exist and reads as 0 — the start
-    // of the data block — so this used to extract whatever happened to be
+    // a 2.x instruction that operand does not exist and reads as 0 - the start
+    // of the data block - so this used to extract whatever happened to be
     // there.
     let inst = parse_fixture("nsis1x_uninst.exe");
     let uninstaller = inst.uninstallers().next().unwrap().unwrap();
@@ -1457,4 +1458,96 @@ fn a_nsis1x_uninstaller_round_trips() {
             "EW_RET",
         ]
     );
+}
+
+/// **A 1.x entry's layout is resolved under the 1.x rules, and a modern one
+/// under its own.**
+///
+/// The pairing is the point: 1.x numbers its instructions differently from every
+/// later version, so its metadata comes from `lookup_v1` and its layout from
+/// `param_layout_v1`. A caller that took one from each table would read a 1.x
+/// entry's operands under a modern opcode's rules - the mnemonic would look
+/// right and every slot would be wrong. `NsisInstaller::param_layout` owns both
+/// halves so they cannot be mixed.
+///
+/// Asserted as agreement with the renderer rather than against a hardcoded
+/// table: the renderer is the consumer whose output is already pinned by the
+/// fixtures above, so if the layout this hands back were the wrong version's,
+/// those would move.
+#[test]
+fn a_layout_is_resolved_under_its_own_installers_version() {
+    for name in ["nsis1x.exe", "nsis246_ansi_solid.exe"] {
+        let inst = parse_fixture(name);
+        let mut checked = 0usize;
+        for entry in inst.entries().take(200) {
+            let Ok(entry) = entry else { continue };
+            let Some(layout) = inst.param_layout(&entry) else {
+                continue;
+            };
+            let Some(info) = inst.resolve_opcode(entry.which()) else {
+                continue;
+            };
+            // Every named slot the layout declares is within the opcode's own
+            // parameter space, which a layout from the other version's table
+            // would routinely exceed.
+            assert!(
+                layout.count as usize <= layout.names.len(),
+                "{name}: {} declares {} operands",
+                info.mnemonic,
+                layout.count
+            );
+            // The layout is the one the renderer uses, so the rendered line
+            // names the slots this declares.
+            let rendered = inst.format_entry(&entry);
+            assert!(
+                rendered.starts_with(info.mnemonic),
+                "{name}: {rendered} is not {}",
+                info.mnemonic
+            );
+            for slot in layout.names.iter().take(layout.count as usize) {
+                if slot.is_empty() {
+                    continue;
+                }
+                checked = checked.saturating_add(1);
+            }
+        }
+        assert!(
+            checked > 0,
+            "{name} declared no named operand at all, so this asserts nothing"
+        );
+    }
+}
+
+/// **Push, Pop and Exch name their command.**
+///
+/// All three are `EW_PUSHPOP`, told apart by which operand is set. Resolving
+/// that through `param_layout` briefly dropped the command from the rendered
+/// line, printed a Pop's selector as `op=1` and an `Exch` depth of 1 as
+/// `index=1`, and no test noticed: no fixture uses the opcode. So the entries
+/// are built by hand and rendered against real installers, whose string tables
+/// resolve the operands.
+#[test]
+fn push_pop_and_exch_name_their_command() {
+    let pushpop = |offsets: [i32; 6]| -> Vec<u8> {
+        std::iter::once(EW_PUSHPOP)
+            .chain(offsets)
+            .flat_map(i32::to_le_bytes)
+            .collect()
+    };
+    for name in ["deflate_nonsolid.exe", "dirs_nsis246_ansi_solid.exe"] {
+        let inst = parse_fixture(name);
+        for (offsets, expected) in [
+            (
+                [1, 0, 0, 0, 0, 0],
+                r#"EW_PUSHPOP op=Push, value="ProgramFilesDir""#,
+            ),
+            ([3, 1, 0, 0, 0, 0], "EW_PUSHPOP op=Pop, var=$3"),
+            ([0, 0, 1, 0, 0, 0], "EW_PUSHPOP op=Exch"),
+            ([0, 0, 2, 0, 0, 0], "EW_PUSHPOP op=Exch, index=2"),
+        ] {
+            let bytes = pushpop(offsets);
+            let entry = Entry::parse(&bytes).unwrap();
+            assert_eq!(inst.format_entry(&entry), expected, "{name}: {offsets:?}");
+        }
+    }
 }

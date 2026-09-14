@@ -14,29 +14,29 @@ use core::fmt;
 /// Identifies a script-level callback exposed by the NSIS common header.
 ///
 /// Every NSIS installer reserves these ten callback slots. The variant
-/// order matches the on-disk common header layout — see
+/// order matches the on-disk common header layout - see
 /// [`Callback::index`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Callback {
-    /// `.onInit` — runs before the installer UI is shown.
+    /// `.onInit` - runs before the installer UI is shown.
     OnInit,
-    /// `.onInstSuccess` — runs after all sections complete successfully.
+    /// `.onInstSuccess` - runs after all sections complete successfully.
     OnInstSuccess,
-    /// `.onInstFailed` — runs when installation fails or aborts.
+    /// `.onInstFailed` - runs when installation fails or aborts.
     OnInstFailed,
-    /// `.onUserAbort` — runs when the user clicks Cancel.
+    /// `.onUserAbort` - runs when the user clicks Cancel.
     OnUserAbort,
-    /// `.onGUIInit` — runs after the installer dialog is created.
+    /// `.onGUIInit` - runs after the installer dialog is created.
     OnGuiInit,
-    /// `.onGUIEnd` — runs after the installer dialog is destroyed.
+    /// `.onGUIEnd` - runs after the installer dialog is destroyed.
     OnGuiEnd,
-    /// `.onMouseOverSection` — runs on section mouse-over in the components page.
+    /// `.onMouseOverSection` - runs on section mouse-over in the components page.
     OnMouseOverSection,
-    /// `.onVerifyInstDir` — runs whenever the install directory changes.
+    /// `.onVerifyInstDir` - runs whenever the install directory changes.
     OnVerifyInstDir,
-    /// `.onSelChange` — runs when section selection changes.
+    /// `.onSelChange` - runs when section selection changes.
     OnSelChange,
-    /// `.onRebootFailed` — runs if a reboot triggered by the installer fails.
+    /// `.onRebootFailed` - runs if a reboot triggered by the installer fails.
     OnRebootFailed,
 }
 

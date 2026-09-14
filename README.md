@@ -1,7 +1,7 @@
 # nsis
 
 A pure Rust parser for [NSIS (NullSoft Scriptable Install System)](https://nsis.sourceforge.io/)
-installer binaries. Provides typed access to all internal structures — from
+installer binaries. Provides typed access to all internal structures - from
 PE overlay detection through decompressed headers to individual bytecode
 instructions and embedded files.
 
@@ -13,11 +13,11 @@ Built for **malware analysis** and **reverse engineering**.
 - Decompress header blocks (deflate, bzip2, LZMA) in solid and non-solid modes
 - Iterate sections, pages, bytecode entries, language tables, and embedded files
 - Decode NSIS string tables (ANSI, Unicode, Jim Park fork encoding) with variable and shell folder resolution
-- Version-aware opcode lookup across every NSIS generation — see below
+- Version-aware opcode lookup across every NSIS generation - see below
 - High-level analysis iterators for security-relevant operations:
   plugin calls, process execution, registry modifications, shortcut creation, uninstaller stubs
 - Extract and decompress embedded files
-- Zero-copy view types — the only heap allocations are for decompressed data and decoded strings
+- Zero-copy view types - the only heap allocations are for decompressed data and decoded strings
 - `#![deny(unsafe_code)]`
 
 ## Supported versions
@@ -40,7 +40,7 @@ non-solid, in any combination the compiler could produce.
 Every one of these is covered by a fixture built with the compiler in question
 and checked against 7-Zip's own listing of the same file, in
 `tests/fixture_registry.rs`. The exception is NSIS 1.x, which 7-Zip cannot open
-at all — those fixtures are checked against their build logs instead.
+at all - those fixtures are checked against their build logs instead.
 
 Builds of makensis with a non-default compile-time configuration are a known
 limit: nearly every field in the header and nearly every instruction sits

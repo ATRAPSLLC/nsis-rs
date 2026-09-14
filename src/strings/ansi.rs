@@ -39,11 +39,11 @@ const NS2_LANG: u8 = 0xFF;
 ///
 /// NSIS 3 moved the codes from the top of the byte range to the bottom. The
 /// ranges overlap with real text in both directions, so a decoder has to be
-/// told which one applies rather than accepting either — see the module docs.
+/// told which one applies rather than accepting either - see the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnsiCodeRange {
     /// `0xDD-0xFF`, used by NSIS 1. Each code byte is a whole variable
-    /// reference and there are no shell or language codes — a different
+    /// reference and there are no shell or language codes - a different
     /// encoding rather than a different range, decoded by
     /// [`strings::v1`](crate::strings::v1).
     Nsis1,
@@ -155,7 +155,7 @@ pub fn read_ansi_string(context: &StringTable<'_>, offset: usize) -> Result<Nsis
 
             match code {
                 // Shell folder ids are two independent bytes. The 14-bit
-                // transform applies to numbers, and a folder pair is not one —
+                // transform applies to numbers, and a folder pair is not one -
                 // running it through the transform mixes the fallback id into
                 // the primary. 7-Zip and Binary Refinery both pass the raw pair.
                 AnsiCode::Shell => segments.push(StringSegment::ShellFolder {

@@ -195,7 +195,7 @@ pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
     // Park2+: GetFontVersion inserted at position 44.
     if matches!(sub, ParkSubVersion::Park2 | ParkSubVersion::Park3) {
         if a == EW_REGISTERDLL as u32 {
-            // This raw opcode is the inserted GetFontVersion — not a V2
+            // This raw opcode is the inserted GetFontVersion - not a V2
             // opcode. Return it as-is so lookup() returns None (or
             // the caller can handle it).
             return raw;
@@ -255,14 +255,14 @@ pub fn normalize_log_opcode(raw: u32) -> u32 {
 ///
 /// Returns the lowest opcode that contradicts the layout, or `None` if the
 /// whole block is consistent with it. An opcode contradicts the layout when it
-/// is not in the table, when it is one that no installer stores, or — the
-/// telling case — when the entry passes **more parameters than that opcode
+/// is not in the table, when it is one that no installer stores, or - the
+/// telling case - when the entry passes **more parameters than that opcode
 /// takes**. Conditional compilation shifts opcode numbers, so reading a block
 /// under the wrong layout tends to land instructions on opcodes whose
 /// parameter counts do not fit.
 ///
 /// `resolve` maps a raw opcode to its table entry under the layout being
-/// tested, and returns `None` for a raw value that layout cannot produce —
+/// tested, and returns `None` for a raw value that layout cannot produce -
 /// including the translation-only slots, which are never stored in a file.
 /// [`standard_layout`] and [`log_layout`] are the two resolvers this crate
 /// uses.
@@ -353,7 +353,7 @@ pub fn log_layout(raw: u32) -> Option<&'static OpcodeInfo> {
 ///
 /// - `EW_GETDLGITEM` whose second parameter is exactly `$HWNDPARENT` proves the
 ///   installer predates 2.26, where that variable sat at index 27 rather than
-///   29. If its first parameter is also 29 — `$_OUTDIR` in that layout — the
+///   29. If its first parameter is also 29 - `$_OUTDIR` in that layout - the
 ///   installer predates 2.04.
 /// - `EW_ASSIGNVAR` writing variable 29 from exactly `$OUTDIR`, with no
 ///   substring parameters, is the `StrCpy $_OUTDIR $OUTDIR` that only the
@@ -364,8 +364,8 @@ pub fn log_layout(raw: u32) -> Option<&'static OpcodeInfo> {
 /// # Limits
 ///
 /// Both markers are instructions a script has to actually use. An installer
-/// that never touches a dialog item and never copies `$OUTDIR` — a plain
-/// `SetOutPath` plus `File` script, for instance — carries no evidence of its
+/// that never touches a dialog item and never copies `$OUTDIR` - a plain
+/// `SetOutPath` plus `File` script, for instance - carries no evidence of its
 /// layout at all, and is reported as [`Nsis2SubVersion::From226`] whatever
 /// version built it. 7-Zip has the same blind spot and makes the same
 /// assumption. It only matters for installers that also reference a variable
@@ -373,7 +373,7 @@ pub fn log_layout(raw: u32) -> Option<&'static OpcodeInfo> {
 ///
 /// `read_var_index` resolves a string-table offset to the variable index of a
 /// string consisting of exactly one variable reference, or `None` for anything
-/// else — the equivalent of 7-Zip's `IsVarStr`.
+/// else - the equivalent of 7-Zip's `IsVarStr`.
 ///
 /// # Source
 ///
@@ -504,7 +504,7 @@ pub fn detect_park_sub_version(
 
 /// Looks up opcode metadata.
 ///
-/// `which` must already be normalised into the standard layout — see
+/// `which` must already be normalised into the standard layout - see
 /// [`normalize_log_opcode`] and [`normalize_park_opcode`], or
 /// [`NsisInstaller::resolve_opcode`](crate::installer::NsisInstaller::resolve_opcode),
 /// which applies whichever the installer needs.
@@ -642,7 +642,7 @@ mod tests {
 
     #[test]
     fn getdlgitem_writing_spec_outdir_means_pre_204() {
-        // Storing the handle in variable 29 — `$_OUTDIR` in that layout — only
+        // Storing the handle in variable 29 - `$_OUTDIR` in that layout - only
         // happens on 2.03 and earlier.
         let data = entry_block(&[(EW_GETDLGITEM, [29, 100, 0, 0, 0, 0])]);
         assert_eq!(

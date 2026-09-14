@@ -32,7 +32,9 @@ use crate::{
         page::PageIter,
         section::{Section, SectionIter, SectionLayout},
     },
-    opcode::{self, Nsis2SubVersion, NsisVersion, OpcodeInfo, ParamType, ParkSubVersion},
+    opcode::{
+        self, Nsis2SubVersion, NsisVersion, OpcodeInfo, ParamLayout, ParamType, ParkSubVersion,
+    },
     strings::{self, NsisString, StringEncoding, StringSegment, StringTable, ansi::AnsiCodeRange},
     util::read_i32_le,
 };
@@ -42,8 +44,8 @@ use crate::{
 /// Solid installers hold every embedded file in one compressed stream, which
 /// the parser decodes up front under the caller's
 /// [`max_decompressed_size`](NsisInstaller::max_decompressed_size) budget. A
-/// stream that fails or overruns that budget does not fail the parse — header
-/// structures remain fully readable — so this records why the file data is
+/// stream that fails or overruns that budget does not fail the parse - header
+/// structures remain fully readable - so this records why the file data is
 /// absent or incomplete.
 ///
 /// Read it through [`NsisInstaller::solid_status`]. Files that fall past a
@@ -231,7 +233,7 @@ pub struct NsisInstaller<'a> {
     /// Control-flow analysis, built on first use.
     ///
     /// Walking the whole entry stream to build it is not cheap, and callers
-    /// reasonably ask for it more than once — the formatters take it as an
+    /// reasonably ask for it more than once - the formatters take it as an
     /// argument, so a caller holding an installer but not the analysis would
     /// otherwise pay for it again.
     analysis: OnceLock<ScriptAnalysis>,
@@ -345,8 +347,8 @@ impl<'a> NsisInstaller<'a> {
         let (header_data, compression, mode, header_compressed_size) =
             decompress::decompress_header(after_fh, expected_size)?;
 
-        // Step 4: Parse the header. NSIS 1.x has no block table — its tables
-        // are laid end to end after a fixed struct — so which layout applies
+        // Step 4: Parse the header. NSIS 1.x has no block table - its tables
+        // are laid end to end after a fixed struct - so which layout applies
         // has to be worked out from whether the header reads consistently
         // under it. The modern layout is tried first: every NSIS since 2.0
         // writes it, and a 1.x header fails its block-offset checks.
@@ -395,7 +397,7 @@ impl<'a> NsisInstaller<'a> {
                 // either: that is far more often the real diagnosis.
                 Err(modern) => {
                     // 1.x writes a different struct for an uninstaller, and
-                    // the FirstHeader flag says which — with 1.x's numbering,
+                    // the FirstHeader flag says which - with 1.x's numbering,
                     // where bit 1 rather than bit 0 carries it.
                     let kind = if first_header.flags() & FH_V1_FLAGS_UNINSTALL != 0 {
                         V1HeaderKind::Uninstaller
@@ -564,7 +566,7 @@ impl<'a> NsisInstaller<'a> {
 
             // Decompress the full stream under the caller's budget. Header
             // parsing has already succeeded, so a failure here degrades to
-            // "no file data" rather than failing the whole parse — but the
+            // "no file data" rather than failing the whole parse - but the
             // reason is recorded in `solid_status` so that file access can
             // report it instead of a misleading bounds error.
             let (full_stream, status) = match decompress::decompress_block(
@@ -649,8 +651,8 @@ impl<'a> NsisInstaller<'a> {
     /// Returns the NSIS 2 variable layout, if this is an NSIS 2 installer.
     ///
     /// `None` for every other version. NSIS 2 moved its built-in variables
-    /// between releases, so decoding a variable reference — or locating the
-    /// internal `$_OUTDIR` — depends on which layout applies. See
+    /// between releases, so decoding a variable reference - or locating the
+    /// internal `$_OUTDIR` - depends on which layout applies. See
     /// [`Nsis2SubVersion`].
     #[inline]
     pub fn nsis2_sub_version(&self) -> Option<Nsis2SubVersion> {
@@ -817,7 +819,7 @@ impl<'a> NsisInstaller<'a> {
     /// Returns the directory the installer writes to by default.
     ///
     /// This is the script's `InstallDir`, and usually begins with a shell
-    /// folder — `$PROGRAMFILES\MyApp`. Render it with
+    /// folder - `$PROGRAMFILES\MyApp`. Render it with
     /// [`NsisString::to_install_path`](crate::strings::NsisString::to_install_path)
     /// or, to place it under an extraction directory,
     /// [`to_path`](crate::strings::NsisString::to_path).
@@ -915,9 +917,9 @@ impl<'a> NsisInstaller<'a> {
     /// Returns an iterator over every instruction in the script.
     ///
     /// Walks the entry stream once, classifying each entry into an
-    /// [`Instruction`](crate::installer::Instruction). The typed iterators —
+    /// [`Instruction`](crate::installer::Instruction). The typed iterators -
     /// [`files`](Self::files), [`plugin_calls`](Self::plugin_calls),
-    /// [`registry_ops`](Self::registry_ops) and the rest — are filters over
+    /// [`registry_ops`](Self::registry_ops) and the rest - are filters over
     /// this same walk, so use this directly when you want more than one kind
     /// of instruction and would otherwise traverse the script several times.
     ///
@@ -1019,6 +1021,29 @@ impl<'a> NsisInstaller<'a> {
             return opcode::lookup_v1(which as u32);
         }
         opcode::lookup(self.normalize_opcode(which) as u32)
+    }
+
+    /// Resolves one entry's operand layout, under this installer's version.
+    ///
+    /// The version pairing is here rather than at the call site because the two
+    /// halves have to match: 1.x numbers its instructions differently from every
+    /// later version, so a 1.x entry must go through `lookup_v1` **and**
+    /// `param_layout_v1`, and a modern one through `lookup` **and**
+    /// `param_layout` over the normalized opcode. A caller that took its
+    /// metadata from one table and its layout from the other would read a 1.x
+    /// entry's operands under a modern opcode's rules - the mnemonic would look
+    /// right and every slot would be wrong.
+    ///
+    /// `None` when the opcode is not one this crate knows.
+    #[must_use]
+    pub fn param_layout(&self, entry: &Entry<'_>) -> Option<ParamLayout> {
+        let info = self.resolve_opcode(entry.which())?;
+        let offsets = entry.offsets();
+        Some(if self.version == NsisVersion::V1 {
+            opcode::param_layout_v1(entry.which().max(0) as u32, info, &offsets)
+        } else {
+            opcode::param_layout(self.normalize_opcode(entry.which()) as u32, info, &offsets)
+        })
     }
 
     /// Returns the on-disk size of one entry for this installer's version.
@@ -1218,28 +1243,54 @@ impl<'a> NsisInstaller<'a> {
         self.write_params(out, entry, Some(analysis));
     }
 
+    /// Renders an `EW_PUSHPOP` entry's operands, naming the command.
+    ///
+    /// The layout already says which of Push, Pop and Exch the entry is, and
+    /// what its first operand means. This only words the line the way the
+    /// disassembly always has: the command up front, and an `Exch` depth of 1
+    /// left implicit.
+    fn write_pushpop_params(&self, out: &mut String, layout: &ParamLayout, offsets: &[i32; 6]) {
+        let [first, _, depth, ..] = *offsets;
+        match layout.types[0] {
+            ParamType::Unused => {
+                out.push_str("op=Exch");
+                if depth != 1 {
+                    let _ = write!(out, ", index={depth}");
+                }
+            }
+            ParamType::Variable => {
+                out.push_str("op=Pop, var=");
+                out.push_str(&format_variable_param(&self.string_table(), first));
+            }
+            ParamType::String | ParamType::Jump | ParamType::Int => {
+                out.push_str("op=Push, value=");
+                out.push_str(&self.format_string_param(first));
+            }
+        }
+    }
+
     /// Renders an entry's operands, annotating jump targets when an analysis
     /// is supplied.
     fn write_params(&self, out: &mut String, entry: &Entry<'_>, analysis: Option<&ScriptAnalysis>) {
-        let Some(info) = self.resolve_opcode(entry.which()) else {
-            let _ = write!(out, "which={}", entry.which());
-            return;
-        };
-
-        if entry.which() == opcode::EW_PUSHPOP {
-            out.push_str(&self.format_pushpop_params(entry));
-            return;
-        }
-
         let offsets = entry.offsets();
         // Some opcodes carry several script commands and choose between them
         // with an operand, so the layout is resolved per entry rather than
-        // taken from the opcode alone.
-        let layout = if self.version == NsisVersion::V1 {
-            opcode::param_layout_v1(entry.which().max(0) as u32, info, &offsets)
-        } else {
-            opcode::param_layout(self.normalize_opcode(entry.which()) as u32, info, &offsets)
+        // taken from the opcode alone - and under this installer's own version,
+        // which `param_layout` pairs for us.
+        let Some(layout) = self.param_layout(entry) else {
+            let _ = write!(out, "which={}", entry.which());
+            return;
         };
+        // Push, Pop and Exch name their command rather than list raw slots.
+        // Keyed on the normalized opcode, since a raw 31 is `IntOp` in 1.x,
+        // and not applied to 1.x at all: its table has no per-command layout
+        // to say which of the three an entry is.
+        if self.version != NsisVersion::V1
+            && self.normalize_opcode(entry.which()) == opcode::EW_PUSHPOP
+        {
+            self.write_pushpop_params(out, &layout, &offsets);
+            return;
+        }
         let count = layout.count as usize;
         if count == 0 {
             return;
@@ -1344,24 +1395,6 @@ impl<'a> NsisInstaller<'a> {
         Ok(self.analysis.get_or_init(|| analysis))
     }
 
-    fn format_pushpop_params(&self, entry: &Entry<'_>) -> String {
-        let offsets = entry.offsets();
-        if offsets[2] != 0 {
-            if offsets[2] == 1 {
-                "op=Exch".to_string()
-            } else {
-                format!("op=Exch, index={}", offsets[2])
-            }
-        } else if offsets[1] != 0 {
-            format!(
-                "op=Pop, var={}",
-                format_variable_param(&self.string_table(), offsets[0])
-            )
-        } else {
-            format!("op=Push, value={}", self.format_string_param(offsets[0]))
-        }
-    }
-
     fn format_string_param(&self, offset: i32) -> String {
         if offset > 0
             && let Ok(value) = self.read_string(offset)
@@ -1395,7 +1428,7 @@ impl<'a> NsisInstaller<'a> {
     /// Each file entry in this buffer is framed with a 4-byte length prefix.
     /// Returns an empty slice for non-solid installers.
     ///
-    /// An empty or short buffer is not necessarily corruption — consult
+    /// An empty or short buffer is not necessarily corruption - consult
     /// [`solid_status`](Self::solid_status) to tell a complete stream from one
     /// that hit the decompression budget or failed to decode.
     #[inline]
@@ -1408,7 +1441,7 @@ impl<'a> NsisInstaller<'a> {
     /// Always [`SolidStatus::NotSolid`] for non-solid installers. For solid
     /// ones it distinguishes a complete decode from a stream cut short by the
     /// [`max_decompressed_size`](Self::max_decompressed_size) budget or one
-    /// that failed outright — neither of which fails the parse, since header
+    /// that failed outright - neither of which fails the parse, since header
     /// structures stay readable either way.
     ///
     /// # Examples

@@ -159,7 +159,7 @@ impl<'a> Section<'a> {
     /// Returns the section flags (`SF_*`).
     ///
     /// An NSIS 1.x section has no flags word. It carries the two states it can
-    /// express — selected and read-only — in the top bits of `default_state`,
+    /// express - selected and read-only - in the top bits of `default_state`,
     /// which are reported here as the `SF_*` flags meaning the same thing. The
     /// flags 1.x has no concept of, such as [`SF_SECGRP`], are never set.
     #[inline]
@@ -226,10 +226,7 @@ impl<'a> Section<'a> {
         if self.is_unicode {
             // UTF-16LE null-terminated
             let mut chars = Vec::new();
-            for chunk in name_buf.chunks_exact(2) {
-                let Some(pair) = chunk.first_chunk::<2>() else {
-                    break;
-                };
+            for pair in name_buf.as_chunks::<2>().0 {
                 let ch = u16::from_le_bytes(*pair);
                 if ch == 0 {
                     break;
@@ -288,8 +285,8 @@ impl<'a> Section<'a> {
     /// Returns `true` if `entry_idx` falls within this section's code range.
     ///
     /// The range is `[code, code + code_size)`. Negative values for
-    /// [`code`](Self::code) or [`code_size`](Self::code_size) — which the
-    /// raw common header may report — are treated as zero, so a section
+    /// [`code`](Self::code) or [`code_size`](Self::code_size) - which the
+    /// raw common header may report - are treated as zero, so a section
     /// with no code never contains any entry.
     pub fn contains_entry(&self, entry_idx: usize) -> bool {
         let start = self.code().max(0) as usize;

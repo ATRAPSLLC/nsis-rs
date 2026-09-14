@@ -254,7 +254,7 @@ struct HuffmanTables {
 ///
 /// The two generations of NSIS bzip2 differ by exactly one bit per block.
 /// Nothing in the stream says which one produced it, so [`decompress_bzip2`]
-/// decodes with `Modern` and falls back to `Nsis1` — a stream read under the
+/// decodes with `Modern` and falls back to `Nsis1` - a stream read under the
 /// wrong layout is misaligned from its origPtr onwards and fails its range
 /// checks almost immediately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,7 +274,7 @@ enum BlockLayout {
 /// # Arguments
 ///
 /// - `compressed`: the raw NSIS bzip2 stream (without standard header)
-/// - `limit`: how the output is bounded — see [`DecodeLimit`]
+/// - `limit`: how the output is bounded - see [`DecodeLimit`]
 ///
 /// # Errors
 ///
@@ -961,7 +961,7 @@ mod tests {
         // Regression: the BWT/RLE output loop emitted its tail bytes without
         // advancing `nblock_used`, so `while nblock_used <= nblock` spun and
         // re-emitted `state_out_ch` until `max_output`. A 38 KB installer
-        // produced 67,104,886 bytes — the entire 64 MiB budget — of which only
+        // produced 67,104,886 bytes - the entire 64 MiB budget - of which only
         // the first 4067 were real and the rest was `0x0A` filler.
         let out = decompress_bzip2(NSIS_SOLID_STREAM, DecodeLimit::Truncate(64 * 1024 * 1024))
             .expect("solid stream should decode");
