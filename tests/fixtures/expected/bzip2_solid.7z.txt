@@ -1,16 +1,15 @@
 
-7-Zip 25.01 (x64) : Copyright (c) 1999-2025 Igor Pavlov : 2025-08-03
- 64-bit locale=en_US.UTF-8 Threads:56 OPEN_MAX:524288, ASM
+7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
 
 Scanning the drive for archives:
-1 file, 38761 bytes (38 KiB)
+1 file, 38775 bytes (38 KiB)
 
 Listing archive: bzip2_solid.exe
 
 --
 Path = bzip2_solid.exe
 Type = Nsis
-Physical Size = 38761
+Physical Size = 38775
 Method = BZip2
 Solid = +
 Headers Size = 3974
@@ -19,9 +18,9 @@ SubType = NSIS-3 Unicode
 
 ----------
 Path = payload.txt
-Size = 55
-Packed Size = 869
-Modified = 2026-04-05 08:24:44.0000000
+Size = 53
+Packed Size = 883
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = BZip2
 Solid = +
@@ -30,9 +29,9 @@ Offset = 0
 Path = config.ini
 Size = 
 Packed Size = 
-Modified = 2026-04-05 08:24:44.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = BZip2
 Solid = +
-Offset = 59
+Offset = 57
 

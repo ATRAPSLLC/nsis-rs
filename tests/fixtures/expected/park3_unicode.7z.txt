@@ -2,14 +2,14 @@
 7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
 
 Scanning the drive for archives:
-1 file, 49508 bytes (49 KiB)
+1 file, 49520 bytes (49 KiB)
 
 Listing archive: park3_unicode.exe
 
 --
 Path = park3_unicode.exe
 Type = Nsis
-Physical Size = 49508
+Physical Size = 49520
 Method = LZMA:23
 Solid = +
 Headers Size = 18664
@@ -19,17 +19,17 @@ SubType = NSIS-Park-3 Unicode
 ----------
 Path = payload.txt
 Size = 53
-Packed Size = 1888
-Modified = 2026-08-15 07:41:08.0000000
+Packed Size = 1900
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
 Offset = 0
 
 Path = docs\config.ini
-Size = 23
+Size = 108
 Packed Size = 
-Modified = 2026-08-15 07:41:08.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
@@ -42,5 +42,5 @@ Modified =
 Attributes = 
 Method = LZMA:23
 Solid = +
-Offset = 84
+Offset = 169
 

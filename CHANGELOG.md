@@ -5,6 +5,64 @@ All notable changes to the `nsis` crate are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-26
+
+### Added
+
+- Operand semantics for every instruction, taken from the runtime's `exec.c`
+  (NSIS 3.10, checked against 2.46, and 1.98 for the 1.x table). `ParamType`
+  now says how each slot is used: `Variable(Access)` (read, written, or
+  written on some runs), `String`, `Number`, `RawString`, `Flag(Access)` and
+  `DataOffset`. `OpcodeInfo::effects` and `ParamLayout::effects` (`Effects`)
+  cover the rest: flags read and set (`ExecFlag`, `FlagSet`), `$OUTDIR` and
+  `$INSTDIR` use, the string stack (`StackEffect`), plugin calls, variables
+  reached without being named (`HiddenVariables`) and whether the instruction
+  can end the script (`Termination`). `ParamLayout::slots()` walks a layout
+  beside an entry's operands.
+- `opcode::lookup_for()`, resolving an opcode under a given installer version.
+  Opcode 37 is `EW_SETBRANDINGIMAGE` in NSIS 2 and Park (`SET_BRANDING_IMAGE`)
+  but `EW_LOADANDSETIMAGE` in NSIS 3.
+- The Park fork's `EW_GETFONTVERSION` and `EW_GETFONTNAME`.
+- `ScriptRootKind::starts_function()`.
+
+### Changed
+
+- Breaking: `ParamType::Variable` carries an `Access`, and `ParamType` gains
+  variants; `OpcodeInfo` and `ParamLayout` gain an `effects` field;
+  `param_layout()` takes the installer's `NsisVersion`;
+  `normalize_park_opcode()` takes whether the build logs; `OPCODES` has 74
+  entries.
+- Test fixtures are built under Wine in Docker by
+  `tests/build_fixtures/build-wine.sh`, with every compiler fetched from its
+  release and 7-Zip 24.08 producing the expected listings. `build.sh` is
+  retired. New fixtures: `semantics`, `plugin_logbuild`, `park2_opcodes` and
+  `park3_opcodes`, checked by `tests/semantics.rs`.
+
+### Fixed
+
+- Operand layouts that disagreed with the runtime: `ExecWait`'s exit-code
+  variable and wait flag were swapped; `LoadAndSetImage` and
+  `GetKnownFolderPath` had the wrong output slots; `EW_SETFLAG` takes four
+  operands; slots the runtime reads were marked unused (`ExecShell`'s mask,
+  `RegDLL`'s load flag, `CreateShortcut`'s description, `WriteINIStr`'s write
+  flag, `WriteUninstaller`'s full path); expanded numbers were read as
+  literals. The 1.x table gets the same operand forms, and its `Push` takes a
+  string, not a variable.
+- A negative string operand renders as the language string `$(LSTR_n)` instead
+  of an empty string, and offset 0 renders as `""` instead of `0`.
+- Logging builds are detected from the `install.log` string in the stub. The
+  operand-count check alone read a logging build that calls a plugin
+  (`plugin_logbuild`) as a standard build.
+- Park installers: the third release (built with logging) had every opcode
+  from `EW_SECTIONSET` up off by one; `FindProc`, `GetFontVersion` and
+  `GetFontName` decoded as other instructions; and Park 3 could be taken for
+  Park 1. The release is now read from the stub when no `WriteUninstaller`
+  entry identifies it.
+- Script analysis no longer starts a new function at every jump target, which
+  split `if` arms and loops into `label_N` functions. Only sections,
+  callbacks, page handlers, call targets and entry zero start a function;
+  unreachable labels still get their own.
+
 ## [0.4.1] - 2026-09-13
 
 ### Added
@@ -471,6 +529,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of the `nsis` crate.
 
+[0.5.0]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.3.0...v0.3.1

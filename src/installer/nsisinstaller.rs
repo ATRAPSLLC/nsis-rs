@@ -33,7 +33,8 @@ use crate::{
         section::{Section, SectionIter, SectionLayout},
     },
     opcode::{
-        self, Nsis2SubVersion, NsisVersion, OpcodeInfo, ParamLayout, ParamType, ParkSubVersion,
+        self, ExecFlag, Nsis2SubVersion, NsisVersion, OpcodeInfo, ParamLayout, ParamType,
+        ParkSubVersion,
     },
     strings::{self, NsisString, StringEncoding, StringSegment, StringTable, ansi::AnsiCodeRange},
     util::read_i32_le,
@@ -70,17 +71,71 @@ pub enum SolidStatus {
     Failed(Error),
 }
 
-/// Decides whether an entry block reads as a log-enabled build.
+/// What an installer's runtime was compiled with, as far as its stub says.
+///
+/// The opcode numbering is the runtime's: each instruction a build compiles in
+/// takes a number, and the header records none of it. Two features leave a
+/// literal in the stub that nothing else puts there, and both renumber opcodes:
+///
+/// - Logging writes `install.log` into the install directory
+///   (`build_g_logfile` in `Ui.c`), UTF-16 in a Unicode build.
+/// - The Park fork's font readers look for the TrueType `name` table by its
+///   tag (`GetTTFNameString` in the fork's `ttf.c`), as an ANSI string in
+///   either width.
+///
+/// Across the fixtures `install.log` marks exactly the three built with
+/// logging - the 3.10 logging build's two, and both Park 3 builds, which the
+/// fork's third release compiles with `NSIS_CONFIG_LOG` - and `name` exactly
+/// the four Park 2 and Park 3 builds. A stub packed or otherwise altered past
+/// reading says nothing, and the entry block decides instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeFeatures {
+    /// Compiled with `NSIS_CONFIG_LOG`.
+    logs: bool,
+    /// The Park fork with its font readers (`NSIS_SUPPORT_GETFONTVERSION`).
+    reads_fonts: bool,
+}
+
+impl RuntimeFeatures {
+    /// Reads the features `stub` - the bytes before the first header - was
+    /// compiled with.
+    fn of(stub: &[u8]) -> Self {
+        let has = |needle: &[u8]| stub.windows(needle.len()).any(|window| window == needle);
+        Self {
+            logs: has(b"install.log") || has(b"i\0n\0s\0t\0a\0l\0l\0.\0l\0o\0g\0"),
+            reads_fonts: has(b"\0name\0"),
+        }
+    }
+
+    /// The Park release a runtime with these features is.
+    ///
+    /// Park 2 added `GetFontVersion`, and Park 3 `GetFontName` and logging
+    /// (`makensis /HDRINFO` of each release). `GetFontName` leaves no literal
+    /// of its own, so a font reader with logging is the third release.
+    fn park_sub(self) -> ParkSubVersion {
+        match (self.reads_fonts, self.logs) {
+            (true, true) => ParkSubVersion::Park3,
+            (true, false) => ParkSubVersion::Park2,
+            (false, _) => ParkSubVersion::Park1,
+        }
+    }
+}
+
+/// Decides whether an entry block reads as a log-enabled build, when the stub
+/// cannot say ([`RuntimeFeatures`]).
 ///
 /// A build compiled with logging stores every opcode above
-/// `EW_WRITEUNINSTALLER` one higher than a standard build does, and nothing in
-/// the header records which produced the file. Both layouts are checked against
-/// the entry block; the standard one is assumed unless it is contradicted and
-/// the log layout is not.
+/// `EW_WRITEUNINSTALLER` one higher than a standard build does. Both layouts
+/// are checked against the entry block; the standard one is assumed unless it
+/// is contradicted and the log layout is not.
 ///
 /// The check is 7-Zip's: an opcode that takes fewer parameters than the entry
 /// passes cannot be the right reading. An installer that uses no opcode above
-/// the boundary is consistent with both, and reads identically either way.
+/// the boundary is consistent with both, and reads identically either way. One
+/// that uses only opcodes whose operands fit both readings is consistent with
+/// both too, and reads differently: `LogSet on` fits `SectionGetText`, and
+/// `SectionGetText` fits `InstTypeGetText`. That is why the stub is asked
+/// first.
 fn detect_log_build(header_data: &[u8], entry_block_offset: usize, entry_count: usize) -> bool {
     // The two layouts agree below `EW_SECTIONSET`, so an installer that never
     // reaches that far reads identically either way and needs no scan at all.
@@ -484,28 +539,43 @@ impl<'a> NsisInstaller<'a> {
         };
         let ansi_codes = AnsiCodeRange::for_version(version);
 
-        // Step 5b: Detect Park sub-version by scanning entries.
+        // Step 5b: what the runtime was compiled with decides its opcode
+        // numbering, and nothing in the header records it. The stub often
+        // says; the entry block is read where it does not.
+        let features =
+            RuntimeFeatures::of(file.get(..first_header_file_offset).unwrap_or_default());
+
+        // Step 5c: the Park sub-version. A `WriteUninstaller` entry shows how
+        // many instructions the fork inserted below it; without one, the stub
+        // says which release it is.
         let ent_count = ent_count_raw.max(0) as usize;
-        let park_sub = if version == NsisVersion::Park {
-            Some(opcode::detect_park_sub_version(
+        let park_sub = (version == NsisVersion::Park).then(|| {
+            let table = StringTable::new(
                 &header_data,
-                ent_offset,
-                ent_count,
-            ))
-        } else {
-            None
+                string_block_offset,
+                encoding,
+                ansi_codes,
+                strings::DEFAULT_INTERNAL_VARS,
+            );
+            opcode::detect_park_sub_version(&header_data, ent_offset, ent_count, |offset| {
+                table.read(offset).ok()
+            })
+            .unwrap_or_else(|| features.park_sub())
+        });
+
+        // Step 5d: a makensis compiled with logging carries an extra opcode,
+        // which shifts every instruction above `EW_WRITEUNINSTALLER`. 1.x has
+        // its own opcode table, which numbers the log instruction whatever the
+        // build.
+        let log_build = match version {
+            NsisVersion::V1 => false,
+            NsisVersion::Park => features.logs,
+            NsisVersion::V2 | NsisVersion::V3 => {
+                features.logs || detect_log_build(&header_data, ent_offset, ent_count)
+            }
         };
 
-        // Step 5c: a makensis compiled with logging carries an extra opcode,
-        // which shifts every instruction above `EW_WRITEUNINSTALLER`. Nothing
-        // in the header says which build produced the file, so both layouts
-        // are read and the one the entry block is consistent with wins. Park
-        // has its own insertions and is normalised separately.
-        // 1.x has its own opcode table, which the log instruction predates.
-        let log_build = !matches!(version, NsisVersion::Park | NsisVersion::V1)
-            && detect_log_build(&header_data, ent_offset, ent_count);
-
-        // Step 5d: NSIS 2 moved its built-in variables around, so an ANSI
+        // Step 5e: NSIS 2 moved its built-in variables around, so an ANSI
         // NSIS-2 installer needs its variable layout pinned down before any
         // variable reference can be decoded correctly.
         let nsis2_sub = if version == NsisVersion::V2 {
@@ -984,7 +1054,7 @@ impl<'a> NsisInstaller<'a> {
         if self.version == NsisVersion::Park
             && let Some(sub) = self.park_sub
         {
-            return opcode::normalize_park_opcode(raw as u32, sub) as i32;
+            return opcode::normalize_park_opcode(raw as u32, sub, self.log_build) as i32;
         }
         if self.log_build {
             return opcode::normalize_log_opcode(raw as u32) as i32;
@@ -1020,7 +1090,7 @@ impl<'a> NsisInstaller<'a> {
             // version, so its table is a separate one rather than a shift.
             return opcode::lookup_v1(which as u32);
         }
-        opcode::lookup(self.normalize_opcode(which) as u32)
+        opcode::lookup_for(self.normalize_opcode(which) as u32, self.version)
     }
 
     /// Resolves one entry's operand layout, under this installer's version.
@@ -1042,7 +1112,12 @@ impl<'a> NsisInstaller<'a> {
         Some(if self.version == NsisVersion::V1 {
             opcode::param_layout_v1(entry.which().max(0) as u32, info, &offsets)
         } else {
-            opcode::param_layout(self.normalize_opcode(entry.which()) as u32, info, &offsets)
+            opcode::param_layout(
+                self.normalize_opcode(entry.which()) as u32,
+                self.version,
+                info,
+                &offsets,
+            )
         })
     }
 
@@ -1258,11 +1333,11 @@ impl<'a> NsisInstaller<'a> {
                     let _ = write!(out, ", index={depth}");
                 }
             }
-            ParamType::Variable => {
+            ParamType::Variable(_) => {
                 out.push_str("op=Pop, var=");
                 out.push_str(&format_variable_param(&self.string_table(), first));
             }
-            ParamType::String | ParamType::Jump | ParamType::Int => {
+            _ => {
                 out.push_str("op=Push, value=");
                 out.push_str(&self.format_string_param(first));
             }
@@ -1282,12 +1357,8 @@ impl<'a> NsisInstaller<'a> {
             return;
         };
         // Push, Pop and Exch name their command rather than list raw slots.
-        // Keyed on the normalized opcode, since a raw 31 is `IntOp` in 1.x,
-        // and not applied to 1.x at all: its table has no per-command layout
-        // to say which of the three an entry is.
-        if self.version != NsisVersion::V1
-            && self.normalize_opcode(entry.which()) == opcode::EW_PUSHPOP
-        {
+        // Keyed on the normalized opcode, since a raw 31 is `IntOp` in 1.x.
+        if self.normalize_opcode(entry.which()) == opcode::EW_PUSHPOP {
             self.write_pushpop_params(out, &layout, &offsets);
             return;
         }
@@ -1322,11 +1393,18 @@ impl<'a> NsisInstaller<'a> {
             };
 
             match ptype {
-                ParamType::String => {
+                ParamType::String | ParamType::Number | ParamType::RawString => {
                     separate(out, &mut written);
                     write_named(out, name, &self.format_string_param(val));
                 }
-                ParamType::Variable => {
+                ParamType::Flag(_) => {
+                    separate(out, &mut written);
+                    match ExecFlag::from_index(val) {
+                        Some(flag) => write_named(out, name, flag.name()),
+                        None => write_named(out, name, &val.to_string()),
+                    }
+                }
+                ParamType::Variable(_) => {
                     separate(out, &mut written);
                     write_named(out, name, &format_variable_param(&self.string_table(), val));
                 }
@@ -1347,7 +1425,7 @@ impl<'a> NsisInstaller<'a> {
                         }
                     }
                 }
-                ParamType::Int => {
+                ParamType::Int | ParamType::DataOffset => {
                     if val != 0 || i < count.min(2) {
                         separate(out, &mut written);
                         write_named(out, name, &val.to_string());
@@ -1395,16 +1473,13 @@ impl<'a> NsisInstaller<'a> {
         Ok(self.analysis.get_or_init(|| analysis))
     }
 
+    /// Renders a string operand: the text it reads back as, quoted, or the
+    /// raw value when it reads back as nothing the table holds.
     fn format_string_param(&self, offset: i32) -> String {
-        if offset > 0
-            && let Ok(value) = self.read_string(offset)
-        {
-            let value = value.to_string();
-            if !value.is_empty() {
-                return format!("{value:?}");
-            }
+        match self.read_string(offset) {
+            Ok(value) => format!("{:?}", value.to_string()),
+            Err(_) => offset.to_string(),
         }
-        offset.to_string()
     }
 
     /// Returns where NSIS 1.x records its uninstaller data, if this is one.

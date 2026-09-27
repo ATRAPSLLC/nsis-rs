@@ -11,15 +11,20 @@
 //! Source: `fileform.h` and `exec.c` from the NSIS source code.
 
 pub mod info;
+pub mod semantics;
 pub mod v1;
 pub mod version;
 
 use crate::{
     nsis::entry::{Entry, MAX_ENTRY_OFFSETS},
+    strings::NsisString,
     util::read_i32_le,
 };
 
-pub use info::{OpcodeInfo, ParamLayout, ParamType, param_layout};
+pub use info::{OpcodeInfo, ParamLayout, ParamType, SET_BRANDING_IMAGE, param_layout};
+pub use semantics::{
+    Access, Effects, ExecFlag, FlagSet, HiddenVariables, StackEffect, Termination,
+};
 pub use v1::{OPCODES_V1, canonical_opcode, lookup_v1, param_layout_v1};
 pub use version::{Nsis2SubVersion, NsisVersion, ParkSubVersion};
 
@@ -176,15 +181,28 @@ pub const EW_FGETWS: i32 = 69;
 pub const EW_LOG: i32 = 70;
 /// FindProc, present only in the Park fork.
 pub const EW_FINDPROC: i32 = 71;
+/// GetFontVersion, present only in the Park fork from its second release.
+pub const EW_GETFONTVERSION: i32 = 72;
+/// GetFontName, present only in the Park fork from its third release.
+pub const EW_GETFONTNAME: i32 = 73;
 
 /// Normalizes a Park raw opcode to its V2-equivalent opcode number.
 ///
 /// Park builds insert extra opcodes into the table, shifting subsequent
 /// opcode numbers upward. This function reverses that shift so the raw
-/// opcode can be looked up in the V2 table.
+/// opcode can be looked up in the V2 table, and gives the fork's own
+/// instructions the translation-only slots this crate keeps for them.
 ///
-/// Implements the same logic as 7-Zip `NsisIn.cpp` `GetCmd()`.
-pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
+/// The order is the fork's `Source/exehead/fileform.h` (2.46.3), under the
+/// defines each released build reports with `makensis /HDRINFO`:
+/// `GetFontVersion` (Park 2 and 3) and `GetFontName` (Park 3) sit before
+/// `EW_REGISTERDLL`; the UTF-16 file commands before `EW_FSEEK`; the log
+/// instruction, when `log` - Park 3 is compiled with `NSIS_CONFIG_LOG` - after
+/// `EW_WRITEUNINSTALLER`; and `FindProc` after `EW_LOCKWINDOW`, last.
+///
+/// Returns `u32::MAX` for a number past `FindProc`, which no Park build
+/// stores, so that it resolves to no opcode.
+pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion, log: bool) -> u32 {
     let mut a = raw;
 
     // Opcodes below EW_REGISTERDLL (44) are the same in all versions.
@@ -195,10 +213,7 @@ pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
     // Park2+: GetFontVersion inserted at position 44.
     if matches!(sub, ParkSubVersion::Park2 | ParkSubVersion::Park3) {
         if a == EW_REGISTERDLL as u32 {
-            // This raw opcode is the inserted GetFontVersion - not a V2
-            // opcode. Return it as-is so lookup() returns None (or
-            // the caller can handle it).
-            return raw;
+            return EW_GETFONTVERSION as u32;
         }
         a = a.saturating_sub(1);
     }
@@ -206,7 +221,7 @@ pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
     // Park3+: GetFontName inserted at position 44 (after the Park2 shift).
     if sub == ParkSubVersion::Park3 {
         if a == EW_REGISTERDLL as u32 {
-            return raw; // inserted GetFontName
+            return EW_GETFONTNAME as u32;
         }
         a = a.saturating_sub(1);
     }
@@ -223,7 +238,21 @@ pub fn normalize_park_opcode(raw: u32, sub: ParkSubVersion) -> u32 {
         a = a.saturating_sub(2);
     }
 
-    a
+    // The log instruction, where the build has it.
+    if log && a >= EW_SECTIONSET as u32 {
+        if a == EW_SECTIONSET as u32 {
+            return EW_LOG as u32;
+        }
+        a = a.saturating_sub(1);
+    }
+
+    // FindProc follows EW_LOCKWINDOW, where the standard layout keeps the
+    // UTF-16 file commands Park stores lower down.
+    match a {
+        a if a == EW_FPUTWS as u32 => EW_FINDPROC as u32,
+        a if a > EW_FPUTWS as u32 => u32::MAX,
+        a => a,
+    }
 }
 
 /// Translates a raw opcode from a log-enabled build into the main layout.
@@ -445,15 +474,22 @@ pub fn detect_nsis2_sub_version(
 /// Replicates 7-Zip's `DetectNsisType()` logic: find entries whose raw
 /// opcode falls in `[EW_WRITEUNINSTALLER .. EW_WRITEUNINSTALLER + 4]` and
 /// whose parameters match the WriteUninstaller signature (param\[0\] > 1,
-/// param\[3\] > 1, param\[4\] == 0, param\[5\] == 0).
+/// param\[3\] > 1, param\[4\] == 0, param\[5\] == 0) - and whose fourth
+/// operand reads as `$INSTDIR\` followed by what the first reads as, the
+/// full path the compiler always writes beside the name. Without that last
+/// check any four-operand instruction in the range passes: Park 3's
+/// `FileSeek $2 0 END $3` is raw 62 with operands `[2, 3, 141, 2, 0, 0]`, and
+/// read Park 3 as Park 1. `read_string` resolves a string-table offset.
 ///
 /// The offset from `EW_WRITEUNINSTALLER` reveals how many extra opcodes
-/// were inserted, which identifies the sub-version.
+/// were inserted, which identifies the sub-version. `None` when no entry is a
+/// `WriteUninstaller`: then the entries do not say.
 pub fn detect_park_sub_version(
     header_data: &[u8],
     entry_block_offset: usize,
     entry_count: usize,
-) -> ParkSubVersion {
+    read_string: impl Fn(i32) -> Option<NsisString>,
+) -> Option<ParkSubVersion> {
     // The maximum number of extra inserts for Unicode Park is 4.
     let base = EW_WRITEUNINSTALLER;
     let max_raw = base + 4;
@@ -488,6 +524,12 @@ pub fn detect_park_sub_version(
         if p4 != 0 || p5 != 0 || p0 <= 1 || p3 <= 1 {
             continue;
         }
+        let (Some(name), Some(full)) = (read_string(p0), read_string(p3)) else {
+            continue;
+        };
+        if full.to_string() != format!("$INSTDIR\\{name}") {
+            continue;
+        }
 
         let num_inserts = raw_cmd.saturating_sub(base) as u32;
         mask |= 1_u32.checked_shl(num_inserts).unwrap_or(0);
@@ -496,9 +538,10 @@ pub fn detect_park_sub_version(
     // Park sub-version from mask (Unicode mode).
     // Source: 7-Zip NsisIn.cpp lines 2656-2661.
     match mask {
-        m if m & (1 << 4) != 0 => ParkSubVersion::Park3,
-        m if m & (1 << 3) != 0 => ParkSubVersion::Park2,
-        _ => ParkSubVersion::Park1,
+        0 => None,
+        m if m & (1 << 4) != 0 => Some(ParkSubVersion::Park3),
+        m if m & (1 << 3) != 0 => Some(ParkSubVersion::Park2),
+        _ => Some(ParkSubVersion::Park1),
     }
 }
 
@@ -514,8 +557,34 @@ pub fn detect_park_sub_version(
 /// by separate tables.
 ///
 /// Returns `None` if the opcode is outside the table.
+///
+/// This is the NSIS 3 reading of each number; [`lookup_for`] gives the one an
+/// installer of a given version means.
 pub fn lookup(which: u32) -> Option<&'static OpcodeInfo> {
     info::OPCODES.get(which as usize)
+}
+
+/// Looks up opcode metadata as an installer of `version` means it.
+///
+/// NSIS 2 and 3 number their instructions identically, and one number means
+/// two instructions: NSIS 3 generalized `EW_SETBRANDINGIMAGE` into
+/// `EW_LOADANDSETIMAGE` and kept its number, so an NSIS 2 or Park installer's
+/// opcode 37 is [`SET_BRANDING_IMAGE`], whose image path sits where the newer
+/// instruction keeps its output variable. `which` is normalized as for
+/// [`lookup`]; NSIS 1.x has a table of its own ([`lookup_v1`]).
+pub fn lookup_for(which: u32, version: NsisVersion) -> Option<&'static OpcodeInfo> {
+    if matches!(version, NsisVersion::V2 | NsisVersion::Park) {
+        if which == EW_LOADANDSETIMAGE as u32 {
+            return Some(&SET_BRANDING_IMAGE);
+        }
+        // NSIS 2 numbers `GetLabelAddress` and `GetFunctionAddress` here, and
+        // its compiler turns both into `EW_ASSIGNVAR`: no NSIS 2 installer
+        // stores either.
+        if which == EW_GETOSINFO as u32 || which == EW_RESERVEDOPCODE as u32 {
+            return None;
+        }
+    }
+    lookup(which)
 }
 
 #[cfg(test)]

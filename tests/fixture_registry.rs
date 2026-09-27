@@ -23,8 +23,6 @@
     clippy::indexing_slicing
 )]
 
-use std::collections::BTreeMap;
-
 use nsis::{
     NsisInstaller,
     decompress::{CompressionMethod, CompressionMode},
@@ -411,6 +409,73 @@ const FIXTURES: &[Fixture] = &[
         name_defect: None,
         ground_truth: GroundTruth::SevenZip,
     },
+    // -- One of each operand form, for the operand-role tests --
+    Fixture {
+        name: "semantics",
+        compiler: "makensis 3.10 (x86-unicode)",
+        version: NsisVersion::V3,
+        nsis2_sub: None,
+        encoding: StringEncoding::Unicode,
+        method: CompressionMethod::Deflate,
+        mode: CompressionMode::NonSolid,
+        // payload.txt, and the System plugin its `System::Call` unpacks.
+        files: 2,
+        uninstallers: 1,
+        budget: DEFAULT_BUDGET,
+        version_defect: None,
+        name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
+    },
+    // A logging build that calls a plugin: the four-operand `EW_SETFLAG` a
+    // plugin call compiles to is what a three-operand table misreads.
+    Fixture {
+        name: "plugin_logbuild",
+        compiler: "makensis 3.10 logging build (x86-unicode)",
+        version: NsisVersion::V3,
+        nsis2_sub: None,
+        encoding: StringEncoding::Unicode,
+        method: CompressionMethod::Deflate,
+        mode: CompressionMode::NonSolid,
+        files: 2,
+        uninstallers: 0,
+        budget: DEFAULT_BUDGET,
+        version_defect: None,
+        name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
+    },
+    // -- The Park fork's own numbering, one fixture per release that changes
+    // it, without the `WriteUninstaller` entry its release is otherwise read
+    // from --
+    Fixture {
+        name: "park2_opcodes",
+        compiler: "makensis 2.46.2-Unicode",
+        version: NsisVersion::Park,
+        nsis2_sub: None,
+        encoding: StringEncoding::Park,
+        method: CompressionMethod::Deflate,
+        mode: CompressionMode::NonSolid,
+        files: 1,
+        uninstallers: 0,
+        budget: DEFAULT_BUDGET,
+        version_defect: None,
+        name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
+    },
+    Fixture {
+        name: "park3_opcodes",
+        compiler: "makensis 2.46.3-Unicode",
+        version: NsisVersion::Park,
+        nsis2_sub: None,
+        encoding: StringEncoding::Park,
+        method: CompressionMethod::Deflate,
+        mode: CompressionMode::NonSolid,
+        files: 1,
+        uninstallers: 0,
+        budget: DEFAULT_BUDGET,
+        version_defect: None,
+        name_defect: None,
+        ground_truth: GroundTruth::SevenZip,
+    },
     // -- NSIS 1.x, a different container format --
     Fixture {
         name: "nsis1x",
@@ -428,7 +493,7 @@ const FIXTURES: &[Fixture] = &[
         // Relative to the install directory, as a 7-Zip listing would be.
         // nsis1x.nsi extracts one file, and makensis 1.98 reported the whole
         // installer as 1 section and 3 instructions.
-        ground_truth: GroundTruth::BuildLog(&[("payload.txt", 54)]),
+        ground_truth: GroundTruth::BuildLog(&[("payload.txt", 53)]),
     },
     Fixture {
         name: "nsis1x_bzip2",
@@ -447,7 +512,7 @@ const FIXTURES: &[Fixture] = &[
         budget: DEFAULT_BUDGET,
         version_defect: None,
         name_defect: None,
-        ground_truth: GroundTruth::BuildLog(&[("payload.txt", 54)]),
+        ground_truth: GroundTruth::BuildLog(&[("payload.txt", 53)]),
     },
     Fixture {
         name: "nsis1x_uninst",
@@ -463,7 +528,7 @@ const FIXTURES: &[Fixture] = &[
         version_defect: None,
         name_defect: None,
         // The build log reports 2 sections, 7 instructions and both files.
-        ground_truth: GroundTruth::BuildLog(&[("docs\\config.ini", 23), ("payload.txt", 54)]),
+        ground_truth: GroundTruth::BuildLog(&[("docs\\config.ini", 108), ("payload.txt", 53)]),
     },
     // -- Payload larger than the default budget --
     Fixture {
@@ -794,34 +859,29 @@ fn solid_fixtures_decompress_completely() {
 
 #[test]
 fn fixture_payloads_have_the_expected_contents() {
-    // The build script writes one known payload; every fixture that extracts it
-    // must produce identical bytes, whatever the compressor or NSIS version.
-    let mut seen = BTreeMap::new();
+    // `build-wine.sh` writes one payload, so every fixture carries exactly
+    // these bytes, whatever the compressor or NSIS version. (The Windows host
+    // the fixtures were first built on wrote three variants, by batch.)
+    const PAYLOAD: &[u8] = b"This is a test payload for NSIS fixture generation.\r\n";
+    let mut carried = 0usize;
     for fixture in FIXTURES {
         let data = read_fixture(fixture.name);
         let inst = parse(fixture, &data);
         for file in inst.files() {
             let file = file.unwrap();
             let content = file.decompress().unwrap();
-            // `payload.txt` is 52-55 bytes depending on the build batch; group
-            // by length so a corrupt decode stands out against its peers.
-            if content.len() < 64 {
-                let text = String::from_utf8_lossy(&content).to_string();
-                if text.starts_with("This is a test payload") {
-                    seen.insert(fixture.name, text);
-                }
+            if content.starts_with(b"This is a test payload") {
+                assert_eq!(
+                    content, PAYLOAD,
+                    "{}: payload.txt is not the build script's payload",
+                    fixture.name
+                );
+                carried += 1;
             }
         }
     }
     assert!(
-        seen.len() > 10,
-        "expected most fixtures to carry the standard payload, found {}",
-        seen.len()
+        carried > 10,
+        "expected most fixtures to carry the standard payload, found {carried}"
     );
-    for (name, text) in &seen {
-        assert!(
-            text.contains("test payload for NSIS fixture generation"),
-            "{name}: payload text is corrupt: {text:?}"
-        );
-    }
 }

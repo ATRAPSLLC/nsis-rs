@@ -2,6 +2,8 @@
 //!
 //! All test fixtures are built from `.nsi` scripts in `tests/build_fixtures/`
 //! using `makensis` and cover specific compression/encoding/feature combinations.
+//! `tests/build_fixtures/build-wine.sh` rebuilds them under Wine (see the README
+//! beside it).
 
 #![allow(
     clippy::unwrap_used,
@@ -438,6 +440,57 @@ fn script_analysis_builds_roots_blocks_and_edges() {
             .any(|root| matches!(root.kind, nsis::ScriptRootKind::Callback { .. })),
         "entry 79 should have a callback root"
     );
+}
+
+/// **A jump stays inside the function it is in.** Labels are places a
+/// function's own jumps go, not functions: split at every label, this
+/// fixture had 21 functions, 4 of them bare labels, and 6 jumps and
+/// fall-throughs crossing from one function into another (GAPS G35 in
+/// analysir). Only a call leaves a function now. The population assertions
+/// keep this from passing on a fixture with no labels to split at.
+#[test]
+fn control_flow_stays_inside_its_function() {
+    let inst = parse_fixture("full_featured.exe");
+    let analysis = inst.script_analysis().unwrap();
+    let function_of = |block: usize| analysis.blocks.get(block).and_then(|b| b.function);
+
+    let labels = analysis
+        .roots
+        .iter()
+        .filter(|root| matches!(root.kind, nsis::ScriptRootKind::Label))
+        .count();
+    assert!(labels > 0, "the fixture has labels to split at");
+    let mut local = 0usize;
+    for edge in &analysis.edges {
+        if matches!(edge.kind, nsis::EdgeKind::Call { .. }) {
+            continue;
+        }
+        let Some(target) = edge.target_block else {
+            continue;
+        };
+        assert_eq!(
+            function_of(edge.source_block),
+            function_of(target),
+            "{:?} edge from entry {} leaves its function",
+            edge.kind,
+            edge.source_entry
+        );
+        local += 1;
+    }
+    assert!(local > 0, "the fixture has jumps and fall-throughs");
+    assert!(
+        analysis.functions.iter().all(|function| function
+            .roots
+            .iter()
+            .filter_map(|id| analysis.roots.get(*id))
+            .any(|root| root.kind.starts_function())),
+        "every function here is entered from outside its own control flow"
+    );
+    assert!(
+        analysis.blocks.iter().all(|block| block.function.is_some()),
+        "every block belongs to a function"
+    );
+    assert_eq!(analysis.functions.len(), 17);
 }
 
 #[test]
@@ -1258,11 +1311,16 @@ fn instructions_above_the_opcode_boundary_decode() {
             63,
             r#"EW_SECTIONSET section="0", op=-1, text="Renamed Section""#,
         ),
-        (64, r#"EW_INSTTYPESET inst_type="0", text="Typical", op=1"#),
-        (65, "EW_GETOSINFO operation=0, varies=3"),
-        (67, "EW_LOCKWINDOW on_off=0"),
+        (64, r#"EW_INSTTYPESET inst_type="0", text="Typical", set=1"#),
+        // `GetKnownFolderPath`: the variable is slot 1 and the folder id slot
+        // 2, which the table once rendered as `operation=0, varies=3`.
+        (
+            65,
+            r#"EW_GETOSINFO output=$3, source="{3EB685DB-65F9-4CF6-A03A-E3EF65729F3D}""#,
+        ),
+        (67, "EW_LOCKWINDOW unlock=0"),
         (68, r#"EW_FPUTWS handle=$1, string="wide text""#),
-        (69, "EW_FGETWS handle=$1, output=$2, maxlen=\"1023\""),
+        (69, "EW_FGETWS handle=$1, output=$2, max_len=\"1023\""),
     ] {
         assert!(
             lines.iter().any(|l| l == expected),
@@ -1346,7 +1404,7 @@ fn nsis1x_instructions_use_the_1x_opcode_table() {
     assert_eq!(
         decoded,
         [
-            r#"EW_CREATEDIR path="$INSTDIR", update_instdir=1"#,
+            r#"EW_CREATEDIR path="$INSTDIR", set_outdir=1"#,
             r#"EW_EXTRACTFILE overwrite=0, name="payload.txt""#,
             "EW_RET",
         ]
@@ -1402,7 +1460,7 @@ fn nsis1x_bzip2_is_solid_and_decodes() {
     );
     let content = file.decompress().unwrap();
     assert!(content.starts_with(b"This is a test payload"));
-    assert_eq!(content.len(), 54, "the build log reports 54 bytes");
+    assert_eq!(content.len(), 53, "the build log reports 53 bytes");
 }
 
 #[test]

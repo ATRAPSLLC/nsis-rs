@@ -203,6 +203,21 @@ pub enum ScriptRootKind {
     EntryZero,
 }
 
+impl ScriptRootKind {
+    /// Whether code reached from this root is a function of its own.
+    ///
+    /// Everything the installer enters from outside the script's own control
+    /// flow is: a section, a callback, a page handler, a call target, entry
+    /// zero. A label is not: it is somewhere a jump or branch of the function
+    /// it sits in goes, and splitting a function at every label made each
+    /// `if` arm and loop head a function, with the edges between them
+    /// crossing from one function into another.
+    #[must_use]
+    pub fn starts_function(&self) -> bool {
+        !matches!(self, Self::Label)
+    }
+}
+
 /// Page callback slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageHandler {
@@ -946,39 +961,111 @@ fn build_functions(
     for (root_id, root) in roots.iter().enumerate() {
         by_entry.entry(root.entry).or_default().push(root_id);
     }
+    let starts_function = |root_ids: &[usize]| {
+        root_ids
+            .iter()
+            .filter_map(|id| roots.get(*id))
+            .any(|root| root.kind.starts_function())
+    };
 
-    let root_entries: BTreeSet<_> = by_entry.keys().copied().collect();
+    // A function runs until the next function's entry, through every label in
+    // between.
+    let function_entries: BTreeSet<_> = by_entry
+        .iter()
+        .filter(|(_, root_ids)| starts_function(root_ids))
+        .map(|(entry, _)| *entry)
+        .collect();
     let mut functions = Vec::new();
-    for (entry, root_ids) in by_entry {
-        let Some(start_block) = block_for_entry(blocks, entry) else {
+    for (entry, root_ids) in by_entry
+        .iter()
+        .filter(|(entry, _)| function_entries.contains(entry))
+    {
+        push_function(
+            &mut functions,
+            roots,
+            *entry,
+            root_ids,
+            &function_entries,
+            blocks,
+            edges,
+        );
+    }
+
+    // A label no function reaches - dead code, or code only a jump through a
+    // variable gets to - is still code, and gets a function of its own rather
+    // than belonging to none.
+    let mut covered: BTreeSet<usize> = functions
+        .iter()
+        .flat_map(|function| function.blocks.iter().copied())
+        .collect();
+    for (entry, root_ids) in &by_entry {
+        if function_entries.contains(entry) {
+            continue;
+        }
+        let Some(block) = block_for_entry(blocks, *entry) else {
             continue;
         };
-        let blocks_for_function = reachable_blocks(start_block, &root_entries, blocks, edges);
-        let name = root_ids
-            .first()
-            .and_then(|root_id| roots.get(*root_id))
-            .map(|root| root.name.clone())
-            .unwrap_or_else(|| format!("func_{entry}"));
-        let id = functions.len();
-        let end = blocks_for_function
-            .iter()
-            .filter_map(|block_id| blocks.get(*block_id).map(|block| block.end))
-            .max();
-        functions.push(ScriptFunction {
-            id,
-            name,
-            entry,
-            end,
-            roots: root_ids,
-            blocks: blocks_for_function,
-        });
+        if covered.contains(&block) {
+            continue;
+        }
+        push_function(
+            &mut functions,
+            roots,
+            *entry,
+            root_ids,
+            &function_entries,
+            blocks,
+            edges,
+        );
+        if let Some(function) = functions.last() {
+            covered.extend(function.blocks.iter().copied());
+        }
     }
     functions
 }
 
+/// Adds the function entered at `entry`, owning every block reachable from it
+/// before another function's entry.
+fn push_function(
+    functions: &mut Vec<ScriptFunction>,
+    roots: &[ScriptRoot],
+    entry: usize,
+    root_ids: &[usize],
+    function_entries: &BTreeSet<usize>,
+    blocks: &[BasicBlock],
+    edges: &[ControlFlowEdge],
+) {
+    let Some(start_block) = block_for_entry(blocks, entry) else {
+        return;
+    };
+    let blocks_for_function = reachable_blocks(start_block, function_entries, blocks, edges);
+    // The function-starting root names it; a label at the same entry is only
+    // another name for the same place.
+    let name = root_ids
+        .iter()
+        .filter_map(|root_id| roots.get(*root_id))
+        .find(|root| root.kind.starts_function())
+        .or_else(|| root_ids.first().and_then(|root_id| roots.get(*root_id)))
+        .map(|root| root.name.clone())
+        .unwrap_or_else(|| format!("func_{entry}"));
+    let id = functions.len();
+    let end = blocks_for_function
+        .iter()
+        .filter_map(|block_id| blocks.get(*block_id).map(|block| block.end))
+        .max();
+    functions.push(ScriptFunction {
+        id,
+        name,
+        entry,
+        end,
+        roots: root_ids.to_vec(),
+        blocks: blocks_for_function,
+    });
+}
+
 fn reachable_blocks(
     start_block: usize,
-    root_entries: &BTreeSet<usize>,
+    function_entries: &BTreeSet<usize>,
     blocks: &[BasicBlock],
     edges: &[ControlFlowEdge],
 ) -> Vec<usize> {
@@ -998,7 +1085,7 @@ fn reachable_blocks(
             let Some(target) = blocks.get(target_block) else {
                 continue;
             };
-            if target_block != start_block && root_entries.contains(&target.start) {
+            if target_block != start_block && function_entries.contains(&target.start) {
                 continue;
             }
             if seen.insert(target_block) {

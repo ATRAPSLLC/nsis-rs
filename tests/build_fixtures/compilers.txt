@@ -1,0 +1,32 @@
+# The compilers the fixtures are built with.
+#
+#   <slug>  <how>  <source URL>  [<base slug> | sha256=<hash>]
+#
+# `<slug>` is the directory the compiler lands in inside the image
+# (`C:\nsis\<slug>`) and the name `build-wine.sh` maps each fixture to.
+# `<how>` says how the download becomes a compiler directory:
+#
+#   zip        a release zip; its single top-level directory is the compiler
+#   unpack     an installer built with NSIS itself; 7-Zip unpacks it without
+#              running it, which is how the forks with no zip are installed
+#   overlay    a "special build" zip laid over `<base slug>`'s files
+#   install    an installer only its own code can unpack (NSIS 1.x, which
+#              7-Zip cannot open), run silently under Xvfb; it opens its
+#              documentation when done, so it is stopped after a minute
+#              and judged by what it installed
+#
+# A `sha256=` pins a download whose URL does not name its content's version.
+#
+# Every URL is the release's own file: SourceForge for NSIS, the Google Code
+# archive for Jim Park's Unicode forks (their project page links there), and
+# for 1.98, which SourceForge no longer lists, the download on Justin
+# Frankel's Nullsoft NSIS page.
+3.10     zip      https://downloads.sourceforge.net/project/nsis/NSIS%203/3.10/nsis-3.10.zip
+3.10log  overlay  https://downloads.sourceforge.net/project/nsis/NSIS%203/3.10/nsis-3.10-log.zip  3.10
+2.46     zip      https://downloads.sourceforge.net/project/nsis/NSIS%202/2.46/nsis-2.46.zip
+2.25     zip      https://downloads.sourceforge.net/project/nsis/NSIS%202/2.25/nsis-2.25.zip
+2.03     unpack   https://downloads.sourceforge.net/project/nsis/NSIS%202/2.03/nsis203.exe
+park1    unpack   https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/unsis/nsis-2.46.1-Unicode-setup.exe
+park2    unpack   https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/unsis/nsis-2.46.2-Unicode-setup.exe
+park3    unpack   https://storage.googleapis.com/google-code-archive-downloads/v2/code.google.com/unsis/nsis-2.46.3-Unicode-setup.exe
+1.98     install  http://www.blorp.com/code/nullsoft/nsis/nsis198.exe  sha256=1b75b409bbe2196f9be451369ab5b213795c45d43fa1ee5b1ea4fc4880e7bacf

@@ -1,0 +1,37 @@
+
+7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
+
+Scanning the drive for archives:
+1 file, 53251 bytes (53 KiB)
+
+Listing archive: plugin_logbuild.exe
+
+--
+Path = plugin_logbuild.exe
+Type = Nsis
+Physical Size = 53251
+Method = Deflate
+Solid = -
+Headers Size = 4898
+Embedded Stub Size = 45056
+SubType = NSIS-3 Unicode BadCmd=13
+
+----------
+Path = payload.txt
+Size = 53
+Packed Size = 53
+Modified = 2026-01-01 00:00:00.0000000
+Attributes = 
+Method = Copy
+Solid = -
+Offset = 0
+
+Path = $PLUGINSDIR\System.dll
+Size = 
+Packed Size = 7090
+Modified = 
+Attributes = 
+Method = Deflate
+Solid = -
+Offset = 57
+
