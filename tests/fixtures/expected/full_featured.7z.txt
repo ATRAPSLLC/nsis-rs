@@ -1,49 +1,48 @@
 
-7-Zip 25.01 (x64) : Copyright (c) 1999-2025 Igor Pavlov : 2025-08-03
- 64-bit locale=en_US.UTF-8 Threads:56 OPEN_MAX:524288, ASM
+7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
 
 Scanning the drive for archives:
-1 file, 66130 bytes (65 KiB)
+1 file, 66096 bytes (65 KiB)
 
 Listing archive: full_featured.exe
 
 --
 Path = full_featured.exe
 Type = Nsis
-Physical Size = 66130
+Physical Size = 66096
 Method = LZMA:23
 Solid = +
-Headers Size = 12774
+Headers Size = 12770
 Embedded Stub Size = 54272
 SubType = NSIS-3 Unicode
 
 ----------
 Path = payload.txt
-Size = 55
-Packed Size = 11854
-Modified = 2026-04-05 06:34:22.0000000
+Size = 53
+Packed Size = 11820
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
 Offset = 0
 
-Path = docs/payload.txt
-Size = 55
+Path = docs\payload.txt
+Size = 53
 Packed Size = 
-Modified = 2026-04-05 06:34:22.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
 Offset = 0
 
 Path = config.ini
-Size = 27
+Size = 108
 Packed Size = 
-Modified = 2026-04-05 06:34:22.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
-Offset = 59
+Offset = 57
 
 Path = uninstall.exe
 Size = 
@@ -52,5 +51,5 @@ Modified =
 Attributes = 
 Method = LZMA:23
 Solid = +
-Offset = 90
+Offset = 169
 

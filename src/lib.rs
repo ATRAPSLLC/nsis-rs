@@ -127,5 +127,6 @@ pub use installer::{
     ShortcutIter, SolidStatus, Uninstaller, UninstallerIter,
 };
 pub use opcode::{
-    Nsis2SubVersion, NsisVersion, OpcodeInfo, ParamLayout, ParamType, ParkSubVersion,
+    Access, Effects, ExecFlag, FlagSet, HiddenVariables, Nsis2SubVersion, NsisVersion, OpcodeInfo,
+    ParamLayout, ParamType, ParkSubVersion, StackEffect, Termination,
 };

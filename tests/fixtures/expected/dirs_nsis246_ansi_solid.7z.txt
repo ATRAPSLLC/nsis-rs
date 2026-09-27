@@ -2,14 +2,14 @@
 7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
 
 Scanning the drive for archives:
-1 file, 33072 bytes (33 KiB)
+1 file, 33086 bytes (33 KiB)
 
 Listing archive: dirs_nsis246_ansi_solid.exe
 
 --
 Path = dirs_nsis246_ansi_solid.exe
 Type = Nsis
-Physical Size = 33072
+Physical Size = 33086
 Method = LZMA:23
 Solid = +
 Headers Size = 2871
@@ -19,8 +19,8 @@ SubType = NSIS-2
 ----------
 Path = last.txt
 Size = 53
-Packed Size = 812
-Modified = 2026-08-15 07:41:08.0000000
+Packed Size = 826
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
@@ -29,7 +29,7 @@ Offset = 0
 Path = payload.txt
 Size = 53
 Packed Size = 
-Modified = 2026-08-15 07:41:08.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
@@ -38,7 +38,7 @@ Offset = 0
 Path = after\after.txt
 Size = 53
 Packed Size = 
-Modified = 2026-08-15 07:41:08.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
@@ -47,7 +47,7 @@ Offset = 0
 Path = $PLUGINSDIR\app-64.7z
 Size = 53
 Packed Size = 
-Modified = 2026-08-15 07:41:08.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
@@ -56,7 +56,7 @@ Offset = 0
 Path = Lang\de_DE.ini
 Size = 
 Packed Size = 
-Modified = 2026-08-15 07:41:08.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
@@ -65,7 +65,7 @@ Offset = 57
 Path = Lang\en_US.ini
 Size = 
 Packed Size = 
-Modified = 2026-08-15 07:41:08.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
@@ -74,7 +74,7 @@ Offset = 57
 Path = Lang\regional\de_AT.ini
 Size = 
 Packed Size = 
-Modified = 2026-08-15 07:41:08.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +
@@ -83,7 +83,7 @@ Offset = 57
 Path = Lang\regional\extra\nested.ini
 Size = 
 Packed Size = 
-Modified = 2026-08-15 07:41:08.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = LZMA:23
 Solid = +

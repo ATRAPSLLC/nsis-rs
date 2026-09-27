@@ -1,16 +1,15 @@
 
-7-Zip 25.01 (x64) : Copyright (c) 1999-2025 Igor Pavlov : 2025-08-03
- 64-bit locale=en_US.UTF-8 Threads:56 OPEN_MAX:524288, ASM
+7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
 
 Scanning the drive for archives:
-1 file, 39273 bytes (39 KiB)
+1 file, 39290 bytes (39 KiB)
 
 Listing archive: deflate_nonsolid.exe
 
 --
 Path = deflate_nonsolid.exe
 Type = Nsis
-Physical Size = 39273
+Physical Size = 39290
 Method = Deflate
 Solid = -
 Headers Size = 3984
@@ -19,9 +18,9 @@ SubType = NSIS-3 Unicode
 
 ----------
 Path = payload.txt
-Size = 55
-Packed Size = 55
-Modified = 2026-04-05 06:34:22.0000000
+Size = 53
+Packed Size = 53
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = Copy
 Solid = -
@@ -29,10 +28,10 @@ Offset = 0
 
 Path = config.ini
 Size = 
-Packed Size = 26
-Modified = 2026-04-05 06:34:22.0000000
+Packed Size = 45
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = Deflate
 Solid = -
-Offset = 59
+Offset = 57
 

@@ -659,17 +659,32 @@ impl<'a> StringTable<'a> {
     ///
     /// String references inside NSIS structures - section `name_ptr` fields,
     /// entry parameter slots - are character indices rather than byte offsets,
-    /// so the offset is scaled by [`char_size`](Self::char_size). A negative
-    /// offset is not a reference at all and yields an empty string.
+    /// so the offset is scaled by [`char_size`](Self::char_size).
+    ///
+    /// A negative value names a language string rather than an offset: NSIS 2
+    /// and 3 store string `n` of the running language's table as `-(n + 1)`
+    /// (`GetNSISTab` in `util.h`) and resolve it when the instruction runs, so
+    /// it reads back as that one [`StringSegment::LangString`]. NSIS 1.x has no
+    /// language tables; there a negative value marks an absent string and
+    /// reads back empty.
     ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidStringOffset`] if the offset lies beyond the
-    /// table.
+    /// table, or names a language string no table can hold.
     pub fn read(&self, offset: i32) -> Result<NsisString, Error> {
         if offset < 0 {
+            if self.ansi_codes == AnsiCodeRange::Nsis1 {
+                return Ok(NsisString {
+                    segments: Vec::new(),
+                });
+            }
+            // `!offset` is `-(offset + 1)`, and cannot overflow.
+            let index = u16::try_from(!offset).map_err(|_| Error::InvalidStringOffset {
+                offset: offset as u32,
+            })?;
             return Ok(NsisString {
-                segments: Vec::new(),
+                segments: vec![StringSegment::LangString(index)],
             });
         }
         let byte_offset = self

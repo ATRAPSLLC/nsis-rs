@@ -2,14 +2,14 @@
 7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
 
 Scanning the drive for archives:
-1 file, 38133 bytes (38 KiB)
+1 file, 38156 bytes (38 KiB)
 
 Listing archive: ansi3_deflate_nonsolid.exe
 
 --
 Path = ansi3_deflate_nonsolid.exe
 Type = Nsis
-Physical Size = 38133
+Physical Size = 38156
 Method = Deflate
 Solid = -
 Headers Size = 2378
@@ -20,18 +20,18 @@ SubType = NSIS-3
 Path = payload.txt
 Size = 53
 Packed Size = 53
-Modified = 2026-08-15 07:41:08.0000000
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
 Method = Copy
 Solid = -
 Offset = 0
 
 Path = config.ini
-Size = 23
-Packed Size = 23
-Modified = 2026-08-15 07:41:08.0000000
+Size = 
+Packed Size = 45
+Modified = 2026-01-01 00:00:00.0000000
 Attributes = 
-Method = Copy
+Method = Deflate
 Solid = -
 Offset = 57
 
