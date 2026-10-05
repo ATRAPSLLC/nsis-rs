@@ -37,7 +37,7 @@ use crate::{
         ParkSubVersion,
     },
     strings::{self, NsisString, StringEncoding, StringSegment, StringTable, ansi::AnsiCodeRange},
-    util::read_i32_le,
+    util::{Blob, read_i32_le},
 };
 
 /// The outcome of decompressing an installer's solid file-data stream.
@@ -227,7 +227,7 @@ struct HeaderStrings {
 #[derive(Debug)]
 pub struct NsisInstaller<'a> {
     /// The original file bytes (borrowed).
-    file: &'a [u8],
+    file: Blob<'a>,
     /// Byte offset of the FirstHeader within the file.
     first_header_file_offset: usize,
     /// Decompressed header data (owned).
@@ -339,7 +339,7 @@ impl<'a> NsisInstaller<'a> {
     /// ```
     pub fn builder(file: &'a [u8]) -> NsisInstallerBuilder<'a> {
         NsisInstallerBuilder {
-            file,
+            file: Blob(file),
             max_decompressed_size: Self::DEFAULT_MAX_DECOMPRESSED_SIZE,
         }
     }
@@ -676,7 +676,7 @@ impl<'a> NsisInstaller<'a> {
         };
 
         Ok(Self {
-            file,
+            file: Blob(file),
             first_header_file_offset,
             header_data,
             compression,
@@ -801,7 +801,7 @@ impl<'a> NsisInstaller<'a> {
     /// Returns the original file bytes.
     #[inline]
     pub fn file_data(&self) -> &'a [u8] {
-        self.file
+        self.file.0
     }
 
     /// Returns the (offset, count) pair for a block, or `(0, 0)` if missing.
@@ -1739,7 +1739,7 @@ impl<'a> NsisInstaller<'a> {
 /// ```
 #[derive(Debug)]
 pub struct NsisInstallerBuilder<'a> {
-    file: &'a [u8],
+    file: Blob<'a>,
     max_decompressed_size: usize,
 }
 
@@ -1763,7 +1763,7 @@ impl<'a> NsisInstallerBuilder<'a> {
     /// Returns an error if parsing fails (not a PE, no overlay, no NSIS
     /// signature, decompression failure, invalid headers).
     pub fn parse(self) -> Result<NsisInstaller<'a>, Error> {
-        NsisInstaller::parse_with_budget(self.file, self.max_decompressed_size)
+        NsisInstaller::parse_with_budget(self.file.0, self.max_decompressed_size)
     }
 }
 
