@@ -18,7 +18,7 @@ pub mod v1;
 use core::fmt;
 use std::borrow::Cow;
 
-use crate::{error::Error, strings::ansi::AnsiCodeRange};
+use crate::{error::Error, strings::ansi::AnsiCodeRange, util::Blob};
 
 /// Identifies the string encoding used by an NSIS installer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -587,7 +587,7 @@ pub fn read_nsis_string(context: &StringTable<'_>, offset: usize) -> Result<Nsis
 #[derive(Debug, Clone, Copy)]
 pub struct StringTable<'a> {
     /// The decompressed header block.
-    data: &'a [u8],
+    data: Blob<'a>,
     /// Byte offset of the string table within `data`.
     base: usize,
     encoding: StringEncoding,
@@ -613,7 +613,7 @@ impl<'a> StringTable<'a> {
         internal_vars: u16,
     ) -> Self {
         Self {
-            data,
+            data: Blob(data),
             base,
             encoding,
             ansi_codes,
@@ -636,7 +636,7 @@ impl<'a> StringTable<'a> {
     /// Returns the header block these strings live in.
     #[inline]
     pub(crate) fn bytes(&self) -> &'a [u8] {
-        self.data
+        self.data.0
     }
 
     /// Returns the special-code range for an ANSI table.
@@ -813,7 +813,7 @@ impl<'a> StringTable<'a> {
         let start = self
             .base
             .saturating_add((offset as usize).saturating_mul(self.char_size()));
-        let Some(rest) = self.data.get(start..) else {
+        let Some(rest) = self.data.0.get(start..) else {
             return String::new();
         };
 

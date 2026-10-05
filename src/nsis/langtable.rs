@@ -8,7 +8,7 @@
 
 use crate::{
     error::Error,
-    util::{read_i32_le, read_u16_le},
+    util::{Blob, read_i32_le, read_u16_le},
 };
 
 /// View type for an NSIS language table entry.
@@ -26,7 +26,7 @@ use crate::{
 /// | 0x08+ | `string_ptrs[]` | Variable-length array of string table offsets |
 #[derive(Debug, Clone)]
 pub struct LangTable<'a> {
-    bytes: &'a [u8],
+    bytes: Blob<'a>,
     entry_size: usize,
 }
 
@@ -53,12 +53,13 @@ impl<'a> LangTable<'a> {
                 context: "LangTable",
             });
         }
+        let bytes = data.get(..size).ok_or(Error::TooShort {
+            expected: size,
+            actual: data.len(),
+            context: "LangTable",
+        })?;
         Ok(Self {
-            bytes: data.get(..size).ok_or(Error::TooShort {
-                expected: size,
-                actual: data.len(),
-                context: "LangTable",
-            })?,
+            bytes: Blob(bytes),
             entry_size: size,
         })
     }
@@ -66,13 +67,13 @@ impl<'a> LangTable<'a> {
     /// Returns the Windows language identifier (LANGID).
     #[inline]
     pub fn lang_id(&self) -> u16 {
-        read_u16_le(self.bytes, 0)
+        read_u16_le(self.bytes.0, 0)
     }
 
     /// Returns the dialog string offset.
     #[inline]
     pub fn dlg_offset(&self) -> i32 {
-        read_i32_le(self.bytes, 4)
+        read_i32_le(self.bytes.0, 4)
     }
 
     /// Returns the string table offset at the given index in the string pointer array.
@@ -82,7 +83,7 @@ impl<'a> LangTable<'a> {
         let offset = index.checked_mul(4)?.checked_add(Self::MIN_SIZE)?;
         let end = offset.checked_add(4)?;
         if end <= self.entry_size {
-            Some(read_i32_le(self.bytes, offset))
+            Some(read_i32_le(self.bytes.0, offset))
         } else {
             None
         }

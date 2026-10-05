@@ -9,7 +9,7 @@ use goblin::pe::{
     options::{ParseMode, ParseOptions},
 };
 
-use crate::error::Error;
+use crate::{error::Error, util::Blob};
 
 /// Provides access to the PE overlay region of an NSIS installer.
 ///
@@ -29,7 +29,7 @@ use crate::error::Error;
 /// ```
 #[derive(Debug)]
 pub struct PeOverlay<'a> {
-    file: &'a [u8],
+    file: Blob<'a>,
     overlay_offset: usize,
 }
 
@@ -101,7 +101,7 @@ impl<'a> PeOverlay<'a> {
         }
 
         Ok(Self {
-            file,
+            file: Blob(file),
             overlay_offset,
         })
     }
@@ -109,7 +109,7 @@ impl<'a> PeOverlay<'a> {
     /// Returns the overlay bytes (everything after the last PE section).
     pub fn overlay(&self) -> &'a [u8] {
         // overlay_offset is validated < file.len() in `parse`.
-        self.file.get(self.overlay_offset..).unwrap_or(&[])
+        self.file.0.get(self.overlay_offset..).unwrap_or(&[])
     }
 
     /// Returns the byte offset where the overlay begins in the file.

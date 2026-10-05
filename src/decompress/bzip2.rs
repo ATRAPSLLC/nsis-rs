@@ -54,6 +54,7 @@ use std::panic::{self, AssertUnwindSafe};
 use crate::{
     decompress::{DecodeLimit, Decoded},
     error::Error,
+    util::Blob,
 };
 
 // ---------------------------------------------------------------------------
@@ -97,7 +98,7 @@ const BZ_RUNB: i32 = 1;
 /// Reads bits from a byte slice, most-significant bit first, matching the
 /// bzip2 bitstream convention.
 struct BitReader<'a> {
-    data: &'a [u8],
+    data: Blob<'a>,
     pos: usize,
     buf: u32,
     live: i32,
@@ -106,7 +107,7 @@ struct BitReader<'a> {
 impl<'a> BitReader<'a> {
     fn new(data: &'a [u8]) -> Self {
         Self {
-            data,
+            data: Blob(data),
             pos: 0,
             buf: 0,
             live: 0,
@@ -121,10 +122,10 @@ impl<'a> BitReader<'a> {
                 self.live -= n;
                 return Ok(v as i32);
             }
-            if self.pos >= self.data.len() {
+            if self.pos >= self.data.0.len() {
                 return Err(fail("unexpected end of input"));
             }
-            self.buf = (self.buf << 8) | (self.data[self.pos] as u32);
+            self.buf = (self.buf << 8) | (self.data.0[self.pos] as u32);
             self.live += 8;
             self.pos += 1;
         }

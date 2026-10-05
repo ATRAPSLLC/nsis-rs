@@ -15,6 +15,20 @@
 //! is indistinguishable from a real value and is exactly the kind of quiet
 //! wrongness this crate exists to avoid.
 
+use core::fmt;
+
+/// A wrapper around a `&[u8]` with a custom [`fmt::Debug`] implementation.
+///
+/// This exists to allow for `Debug` derives without printing the entire raw data.
+#[derive(Clone, Default, PartialEq, Eq, Hash, Copy)]
+pub(crate) struct Blob<'a>(pub &'a [u8]);
+
+impl fmt::Debug for Blob<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Blob(size: {})", self.0.len())
+    }
+}
+
 /// Reads a little-endian `u16` from `data` at the given byte `offset`.
 ///
 /// Returns `0` if `offset + 2 > data.len()`.
