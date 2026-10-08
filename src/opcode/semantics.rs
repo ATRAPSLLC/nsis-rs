@@ -313,9 +313,9 @@ pub struct Effects {
     /// system, the registry, windows, processes, the environment, the
     /// installer's own interface - by reading it or by changing it.
     ///
-    /// An instruction that does not computes only on the variables, flags and
-    /// stack it names, so the same inputs give the same result and nothing
-    /// else observes it. One that does may not be repeated, dropped or merged
+    /// One that stays inside computes only on the variables, flags and stack
+    /// it names, so the same inputs give the same result and nothing else
+    /// observes it. One that does may not be repeated, dropped or merged
     /// with another however little of its result the script reads: a second
     /// `IfFileExists` can see a file a `File` between them wrote.
     pub outside: bool,
