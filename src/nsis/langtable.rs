@@ -21,9 +21,13 @@ use crate::{
 /// | Offset | Field | Description |
 /// |--------|-------|-------------|
 /// | 0x00 | `lang_id` | Windows LANGID (u16) |
-/// | 0x02 | (padding) | 2 bytes padding to align |
-/// | 0x04 | `dlg_offset` | Dialog string offset (i32) |
-/// | 0x08+ | `string_ptrs[]` | Variable-length array of string table offsets |
+/// | 0x02 | `dlg_offset` | Added to dialog resource IDs (i32) |
+/// | 0x06 | `rtl` | Non-zero for a right-to-left language (i32) |
+/// | 0x0A+ | `strings[]` | One string table offset per language string (i32) |
+///
+/// The fields are packed: there is no padding after `lang_id`, so the string
+/// offsets start at byte 10. 7-Zip (`NsisIn.cpp`) reads them there, and every
+/// compiler's `langtable_size` is 10 plus a multiple of four.
 #[derive(Debug, Clone)]
 pub struct LangTable<'a> {
     bytes: Blob<&'a [u8]>,
@@ -31,8 +35,8 @@ pub struct LangTable<'a> {
 }
 
 impl<'a> LangTable<'a> {
-    /// Minimum size of a language table entry (lang_id + padding + dlg_offset).
-    pub const MIN_SIZE: usize = 8;
+    /// Minimum size of a language table entry (`lang_id`, `dlg_offset`, `rtl`).
+    pub const MIN_SIZE: usize = 10;
 
     /// Parses a language table entry of the given size.
     ///
@@ -70,13 +74,27 @@ impl<'a> LangTable<'a> {
         read_u16_le(&self.bytes, 0)
     }
 
-    /// Returns the dialog string offset.
+    /// Returns the offset added to dialog resource IDs for this language.
+    ///
+    /// The compiler sets it for a right-to-left language, whose dialogs are
+    /// separate mirrored resources.
     #[inline]
     pub fn dlg_offset(&self) -> i32 {
-        read_i32_le(&self.bytes, 4)
+        read_i32_le(&self.bytes, 2)
     }
 
-    /// Returns the string table offset at the given index in the string pointer array.
+    /// Returns `true` if this is a right-to-left language.
+    #[inline]
+    pub fn is_rtl(&self) -> bool {
+        read_i32_le(&self.bytes, 6) != 0
+    }
+
+    /// Returns the string table offset of language string `index`.
+    ///
+    /// This is the offset to pass to
+    /// [`NsisInstaller::read_string`](crate::NsisInstaller::read_string); to
+    /// read the string with the language strings it refers to resolved, use
+    /// [`NsisInstaller::lang_string`](crate::NsisInstaller::lang_string).
     ///
     /// Returns `None` if the index is out of range for this language table size.
     pub fn string_ptr(&self, index: usize) -> Option<i32> {
@@ -160,8 +178,8 @@ mod tests {
     fn make_lang_table(lang_id: u16, dlg_offset: i32, strings: &[i32]) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&lang_id.to_le_bytes());
-        buf.extend_from_slice(&[0u8; 2]); // padding
         buf.extend_from_slice(&dlg_offset.to_le_bytes());
+        buf.extend_from_slice(&i32::from(dlg_offset != 0).to_le_bytes()); // rtl
         for &s in strings {
             buf.extend_from_slice(&s.to_le_bytes());
         }
@@ -174,6 +192,7 @@ mod tests {
         let lt = LangTable::parse(&data, data.len()).unwrap();
         assert_eq!(lt.lang_id(), 1033); // English
         assert_eq!(lt.dlg_offset(), 100);
+        assert!(lt.is_rtl());
         assert_eq!(lt.string_count(), 3);
         assert_eq!(lt.string_ptr(0), Some(200));
         assert_eq!(lt.string_ptr(1), Some(300));

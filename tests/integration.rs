@@ -1629,3 +1629,121 @@ fn push_pop_and_exch_name_their_command() {
         }
     }
 }
+
+// -- Language tables --
+
+/// The language table for `lang_id`.
+fn lang_table<'a>(
+    inst: &'a NsisInstaller<'_>,
+    lang_id: u16,
+) -> nsis::nsis::langtable::LangTable<'a> {
+    inst.lang_tables()
+        .map(Result::unwrap)
+        .find(|t| t.lang_id() == lang_id)
+        .unwrap_or_else(|| panic!("no table for language {lang_id}"))
+}
+
+#[test]
+fn lang_tables_read_every_field_at_its_offset() {
+    // `langstrings.nsi` loads English, German and Hebrew. The compiler marks
+    // Hebrew right-to-left and offsets its dialog resources by 100.
+    let inst = parse_fixture("langstrings.exe");
+    let mut ids: Vec<u16> = inst.lang_tables().map(|t| t.unwrap().lang_id()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, [1031, 1033, 1037]);
+
+    for (id, rtl, dlg_offset) in [(1033, false, 0), (1031, false, 0), (1037, true, 100)] {
+        let table = lang_table(&inst, id);
+        assert_eq!(table.is_rtl(), rtl, "language {id}");
+        assert_eq!(table.dlg_offset(), dlg_offset, "language {id}");
+    }
+}
+
+#[test]
+fn lang_string_two_is_the_installer_name_in_every_version() {
+    // Language strings 0-2 are the branding text, the caption and `Name`, in
+    // every compiler since NSIS 2. The caption names `$(^Name)` in turn.
+    for (fixture, name) in [
+        ("nsis203_ansi.exe", "NSIS203 Test"),
+        ("nsis246_ansi_solid.exe", "NSIS246 Test"),
+        ("park3_unicode.exe", "Park Test"),
+        ("full_featured.exe", "Full Featured Test"),
+        ("langstrings.exe", "Language Test"),
+    ] {
+        let inst = parse_fixture(fixture);
+        let english = lang_table(&inst, 1033);
+        assert_eq!(
+            inst.lang_string(&english, 2).unwrap().to_string(),
+            name,
+            "{fixture}"
+        );
+        assert_eq!(
+            inst.lang_string(&english, 1).unwrap().to_string(),
+            format!("{name} Setup"),
+            "{fixture}"
+        );
+        assert!(
+            inst.lang_string(&english, 0)
+                .unwrap()
+                .to_string()
+                .starts_with("Nullsoft Install System"),
+            "{fixture}"
+        );
+    }
+}
+
+#[test]
+fn lang_string_follows_the_language() {
+    let inst = parse_fixture("langstrings.exe");
+    let german = lang_table(&inst, 1031);
+    assert_eq!(
+        inst.lang_string(&german, 1).unwrap().to_string(),
+        "Installation von Language Test"
+    );
+}
+
+#[test]
+fn instruction_operands_resolve_per_language() {
+    // `DetailPrint "$(Greeting)"` stores a language-string reference; each
+    // language's text in turn names `$(^Name)`.
+    let inst = parse_fixture("langstrings.exe");
+    let operand = inst
+        .entries()
+        .map(Result::unwrap)
+        .flat_map(|e| e.offsets())
+        .filter(|&offset| offset < 0)
+        .map(|offset| inst.read_string(offset).unwrap())
+        .find(|s| {
+            inst.resolve_lang_strings(s, &lang_table(&inst, 1033))
+                .unwrap()
+                .to_string()
+                .starts_with("Hello")
+        })
+        .expect("the DetailPrint operand");
+    assert!(
+        operand.to_string().starts_with("$(LSTR_"),
+        "unresolved: {operand}"
+    );
+
+    for (id, text) in [
+        (1033, "Hello from Language Test"),
+        (1031, "Hallo von Language Test"),
+        (1037, "Shalom from Language Test"),
+    ] {
+        let resolved = inst
+            .resolve_lang_strings(&operand, &lang_table(&inst, id))
+            .unwrap();
+        assert_eq!(resolved.to_string(), text, "language {id}");
+    }
+}
+
+#[test]
+fn lang_string_rejects_an_index_past_the_table() {
+    let inst = parse_fixture("langstrings.exe");
+    let english = lang_table(&inst, 1033);
+    let past = u16::try_from(english.string_count()).unwrap();
+    assert!(matches!(
+        inst.lang_string(&english, past),
+        Err(Error::InvalidStringOffset { .. })
+    ));
+}

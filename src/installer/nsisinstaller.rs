@@ -28,7 +28,7 @@ use crate::{
     },
     nsis::{
         entry::{Entry, EntryIter},
-        langtable::LangTableIter,
+        langtable::{LangTable, LangTableIter},
         page::PageIter,
         section::{Section, SectionIter, SectionLayout},
     },
@@ -868,7 +868,7 @@ impl<'a> NsisInstaller<'a> {
     /// Returns an iterator over language tables.
     pub fn lang_tables(&self) -> LangTableIter<'_> {
         let (_, count) = self.block_info(BlockType::LangTables);
-        let entry_size = self.langtable_size.max(8) as usize;
+        let entry_size = (self.langtable_size.max(0) as usize).max(LangTable::MIN_SIZE);
         LangTableIter::new(
             self.block_data(BlockType::LangTables),
             count.max(0) as usize,
@@ -878,12 +878,83 @@ impl<'a> NsisInstaller<'a> {
 
     /// Reads and decodes a string from the string table at the given offset.
     ///
-    /// The `offset` is a TCHAR index into the string table, as stored in
-    /// section `name_ptr` fields and entry parameter slots. For Unicode
-    /// installers (NSIS 3.x), each TCHAR is 2 bytes, so the byte position
-    /// is `offset * 2`. For ANSI installers, each TCHAR is 1 byte.
+    /// Every `i32` is a valid argument, with a defined meaning:
+    ///
+    /// - **Zero or positive:** a character index into the string table, as
+    ///   stored in section `name_ptr` fields and entry parameter slots. It is
+    ///   scaled by the character size: 2 bytes for a Unicode installer, 1 for
+    ///   ANSI. Offset 0 is the empty string every table starts with.
+    /// - **Negative:** language string `n`, stored as `-(n + 1)`. NSIS picks
+    ///   the text from the running language's table at install time, so it
+    ///   reads back as a single [`StringSegment::LangString`], rendered as
+    ///   `$(LSTR_n)`. [`resolve_lang_strings`](Self::resolve_lang_strings)
+    ///   replaces it with a given language's text. In an NSIS 1.x installer,
+    ///   which has no language tables, a negative offset means "no string"
+    ///   and reads back empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidStringOffset`] if the offset lies beyond the
+    /// string table, or names a language string no table can hold.
     pub fn read_string(&self, offset: i32) -> Result<NsisString, Error> {
         self.string_table().read(offset)
+    }
+
+    /// Reads language string `index` in `table`'s language, with the language
+    /// strings it refers to resolved.
+    ///
+    /// `index` is the `n` of a [`StringSegment::LangString`]: the string an
+    /// instruction shows as `$(LSTR_n)`. Indices 0 to 2 are the branding
+    /// text, the window caption and the installer `Name` in every NSIS 2 and
+    /// 3 installer.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use nsis::NsisInstaller;
+    ///
+    /// let file = std::fs::read("installer.exe").unwrap();
+    /// let inst = NsisInstaller::from_bytes(&file).unwrap();
+    ///
+    /// // English (US), or the first table if there is none.
+    /// let tables: Vec<_> = inst.lang_tables().filter_map(Result::ok).collect();
+    /// if let Some(table) = tables
+    ///     .iter()
+    ///     .find(|t| t.lang_id() == 1033)
+    ///     .or(tables.first())
+    /// {
+    ///     println!("Name: {}", inst.lang_string(table, 2).unwrap());
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidStringOffset`] if `table` has no string
+    /// `index`, or if it or a string it refers to lies beyond the string
+    /// table.
+    pub fn lang_string(&self, table: &LangTable<'_>, index: u16) -> Result<NsisString, Error> {
+        self.string_table().read_lang(table, index)
+    }
+
+    /// Returns `string` with each language-string reference replaced by its
+    /// text in `table`'s language.
+    ///
+    /// Strings read with [`read_string`](Self::read_string) - instruction
+    /// operands, section names, the common header's strings - keep their
+    /// [`StringSegment::LangString`] references, because the installer only
+    /// picks a language when it runs. This applies one. References `table`
+    /// cannot resolve stay in place; see [`StringTable::resolve_lang`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidStringOffset`] if a string it refers to lies
+    /// beyond the string table.
+    pub fn resolve_lang_strings(
+        &self,
+        string: &NsisString,
+        table: &LangTable<'_>,
+    ) -> Result<NsisString, Error> {
+        self.string_table().resolve_lang(string, table)
     }
 
     /// Returns the directory the installer writes to by default.
