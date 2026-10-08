@@ -300,7 +300,10 @@ pub fn param_layout(
         }
         crate::opcode::EW_REBOOT if v0 != REBOOT_MAGIC => {
             // Anything but the magic is a corrupted installer.
-            layout.effects = NONE.asking().with_termination(Termination::Always);
+            layout.effects = NONE
+                .asking()
+                .with_termination(Termination::Always)
+                .acting_outside();
         }
         crate::opcode::EW_WRITEINI => {
             // A zero section or key is `NULL`, which deletes; the value is
@@ -348,14 +351,14 @@ pub fn param_layout(
         crate::opcode::EW_GETOSINFO => match v3 {
             GETOSINFO_KNOWNFOLDER => {
                 layout.retype(2, String);
-                layout.effects = FAILS;
+                layout.effects = FAILS.acting_outside();
             }
             GETOSINFO_READMEMORY => {
                 // Address zero is the runtime's own flags and OS block, so the
                 // read may see any flag.
                 layout.set(2, "address", Number);
                 layout.set(4, "spec", Number);
-                layout.effects = NONE.reading(FlagSet::ALL);
+                layout.effects = NONE.reading(FlagSet::ALL).acting_outside();
             }
             _ => {
                 layout.clear(1);
@@ -503,7 +506,7 @@ pub static SET_BRANDING_IMAGE: OpcodeInfo = OpcodeInfo {
     param_count: 3,
     param_names: ["image", "control", "resize", "", "", ""],
     param_types: [String, Int, Int, Unused, Unused, Unused],
-    effects: NONE,
+    effects: NONE.acting_outside(),
     description: "SetBrandingImage",
     category: "ui",
 };
@@ -557,7 +560,10 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 1,
         param_names: ["status_text", "", "", "", "", ""],
         param_types: [String, Unused, Unused, Unused, Unused, Unused],
-        effects: NONE.reporting().with_termination(Termination::Always),
+        effects: NONE
+            .reporting()
+            .with_termination(Termination::Always)
+            .acting_outside(),
         description: "Abort installation",
         category: "flow",
     },
@@ -587,7 +593,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // NSIS 2 and 3 read only the text; the compiler writes zero after it.
         param_names: ["text", "", "", "", "", ""],
         param_types: [String, Unused, Unused, Unused, Unused, Unused],
-        effects: NONE.reporting(),
+        effects: NONE.reporting().acting_outside(),
         description: "Update status text",
         category: "ui",
     },
@@ -596,7 +602,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 1,
         param_names: ["milliseconds", "", "", "", "", ""],
         param_types: [Number, Unused, Unused, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "Sleep",
         category: "misc",
     },
@@ -605,7 +611,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 0,
         param_names: ["", "", "", "", "", ""],
         param_types: [Unused, Unused, Unused, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "Bring window to front",
         category: "ui",
     },
@@ -615,7 +621,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // `ShowWindow` commands for the details list and its button.
         param_names: ["list_show", "button_show", "", "", "", ""],
         param_types: [Int, Int, Unused, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "Set details view",
         category: "ui",
     },
@@ -624,7 +630,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 2,
         param_names: ["file", "attributes", "", "", "", ""],
         param_types: [String, Int, Unused, Unused, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "Set file attributes",
         category: "file",
     },
@@ -633,7 +639,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 3,
         param_names: ["path", "set_outdir", "restrict", "", "", ""],
         param_types: [String, Int, Int, Unused, Unused, Unused],
-        effects: FAILS_REPORTING,
+        effects: FAILS_REPORTING.acting_outside(),
         description: "Create directory",
         category: "file",
     },
@@ -642,7 +648,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 3,
         param_names: ["file", "jump_yes", "jump_no", "", "", ""],
         param_types: [String, Jump, Jump, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "If file exists",
         category: "flow",
     },
@@ -682,7 +688,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 4,
         param_names: ["old", "new", "rebootok", "status_text", "", ""],
         param_types: [String, String, Int, String, Unused, Unused],
-        effects: FAILS_REPORTING,
+        effects: FAILS_REPORTING.acting_outside(),
         description: "Rename/move file",
         category: "file",
     },
@@ -692,7 +698,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // Zero asks for the short name.
         param_names: ["input", "output", "long_name", "", "", ""],
         param_types: [String, OUT, Int, Unused, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "Get full path name",
         category: "file",
     },
@@ -701,7 +707,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 2,
         param_names: ["output", "filename", "", "", "", ""],
         param_types: [OUT, String, Unused, Unused, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "Search PATH",
         category: "file",
     },
@@ -710,7 +716,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 2,
         param_names: ["output", "basedir", "", "", "", ""],
         param_types: [OUT, String, Unused, Unused, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "Get temp filename",
         category: "file",
     },
@@ -732,7 +738,8 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         effects: FAILS_REPORTING
             .asking()
             .with_outdir(Access::Read)
-            .with_termination(Termination::May),
+            .with_termination(Termination::May)
+            .acting_outside(),
         description: "Extract file from archive",
         category: "file",
     },
@@ -741,7 +748,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 2,
         param_names: ["filename", "flags", "", "", "", ""],
         param_types: [String, Int, Unused, Unused, Unused, Unused],
-        effects: FAILS_REPORTING,
+        effects: FAILS_REPORTING.acting_outside(),
         description: "Delete file",
         category: "file",
     },
@@ -750,7 +757,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 6,
         param_names: ["mb_flags", "text", "button1", "jump1", "button2", "jump2"],
         param_types: [Int, String, Int, Jump, Int, Jump],
-        effects: FAILS.asking(),
+        effects: FAILS.asking().acting_outside(),
         description: "Message box",
         category: "ui",
     },
@@ -759,7 +766,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 2,
         param_names: ["path", "flags", "", "", "", ""],
         param_types: [String, Int, Unused, Unused, Unused, Unused],
-        effects: FAILS_REPORTING,
+        effects: FAILS_REPORTING.acting_outside(),
         description: "Remove directory",
         category: "file",
     },
@@ -797,7 +804,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 3,
         param_names: ["output", "string", "is_read", "", "", ""],
         param_types: [OUT, String, Int, Unused, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "ReadEnvStr/ExpandEnvStrings",
         category: "string",
     },
@@ -843,7 +850,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 6,
         param_names: ["output", "class", "title", "parent", "after", "flags"],
         param_types: [OUT, String, String, Number, Number, Int],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "FindWindow",
         category: "ui",
     },
@@ -854,7 +861,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // timeout.
         param_names: ["output", "hwnd", "msg", "wparam", "lparam", "flags"],
         param_types: [OUT, Number, Number, Number, Number, Int],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "SendMessage",
         category: "ui",
     },
@@ -863,7 +870,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 3,
         param_names: ["hwnd", "jump_yes", "jump_no", "", "", ""],
         param_types: [Number, Jump, Jump, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "IsWindow",
         category: "ui",
     },
@@ -872,7 +879,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 3,
         param_names: ["output", "dialog", "item_id", "", "", ""],
         param_types: [OUT, Number, Number, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "GetDlgItem",
         category: "ui",
     },
@@ -882,7 +889,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // A byte offset into the installer's control-colors block.
         param_names: ["hwnd", "colors", "", "", "", ""],
         param_types: [Number, Int, Unused, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "Set control colors",
         category: "ui",
     },
@@ -893,7 +900,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // whether the control is a window handle or a dialog item id.
         param_names: ["output", "image", "control", "flags", "", ""],
         param_types: [OUT, Int, Int, Int, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "Load and set image",
         category: "ui",
     },
@@ -902,7 +909,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 5,
         param_names: ["output", "face", "height", "weight", "flags", ""],
         param_types: [OUT, String, Number, Number, Int, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "CreateFont",
         category: "ui",
     },
@@ -911,7 +918,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 4,
         param_names: ["hwnd", "show_state", "hide", "enable", "", ""],
         param_types: [Number, Number, Int, Int, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "ShowWindow",
         category: "ui",
     },
@@ -921,7 +928,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // The mask is `SEE_MASK_*`; `SEE_MASK_NOCLOSEPROCESS` waits.
         param_names: ["verb", "file", "params", "show", "mask", "status_text"],
         param_types: [String, String, String, Int, Int, String],
-        effects: FAILS_REPORTING.with_outdir(Access::Read),
+        effects: FAILS_REPORTING.with_outdir(Access::Read).acting_outside(),
         description: "ShellExecute",
         category: "exec",
     },
@@ -931,7 +938,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // The exit code is written once the process ends, when it started.
         param_names: ["command", "exit_code", "wait", "", "", ""],
         param_types: [String, MAY_OUT, Int, Unused, Unused, Unused],
-        effects: FAILS_REPORTING,
+        effects: FAILS_REPORTING.acting_outside(),
         description: "Exec/ExecWait",
         category: "exec",
     },
@@ -940,7 +947,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 3,
         param_names: ["hi_out", "lo_out", "file", "", "", ""],
         param_types: [OUT, OUT, String, Unused, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "GetFileTime",
         category: "file",
     },
@@ -949,7 +956,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 4,
         param_names: ["hi_out", "lo_out", "file", "kind", "", ""],
         param_types: [OUT, OUT, String, Int, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "GetDLLVersion",
         category: "file",
     },
@@ -967,7 +974,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
             "",
         ],
         param_types: [String, String, String, Int, Int, Unused],
-        effects: FAILS_REPORTING,
+        effects: FAILS_REPORTING.acting_outside(),
         description: "RegisterDLL/plugin call",
         category: "exec",
     },
@@ -978,7 +985,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // no-working-directory flag.
         param_names: ["link", "target", "params", "icon", "packed", "description"],
         param_types: [String, String, String, String, Int, String],
-        effects: FAILS_REPORTING.with_outdir(Access::Read),
+        effects: FAILS_REPORTING.with_outdir(Access::Read).acting_outside(),
         description: "CreateShortcut",
         category: "file",
     },
@@ -987,7 +994,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 4,
         param_names: ["source", "dest", "flags", "status_text", "", ""],
         param_types: [String, String, Int, String, Unused, Unused],
-        effects: FAILS_REPORTING,
+        effects: FAILS_REPORTING.acting_outside(),
         description: "CopyFiles",
         category: "file",
     },
@@ -996,7 +1003,9 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 1,
         param_names: ["magic", "", "", "", "", ""],
         param_types: [Int, Unused, Unused, Unused, Unused, Unused],
-        effects: NONE.writing(FlagSet::of(&[ExecFlag::RebootCalled])),
+        effects: NONE
+            .writing(FlagSet::of(&[ExecFlag::RebootCalled]))
+            .acting_outside(),
         description: "Reboot",
         category: "misc",
     },
@@ -1005,7 +1014,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 5,
         param_names: ["section", "name", "value", "ini_file", "write", ""],
         param_types: [String, String, String, String, Int, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "WriteINIStr",
         category: "registry",
     },
@@ -1014,7 +1023,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 4,
         param_names: ["output", "section", "name", "ini_file", "", ""],
         param_types: [OUT, String, String, String, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "ReadINIStr",
         category: "registry",
     },
@@ -1025,7 +1034,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // the lowest bit.
         param_names: ["", "root", "keyname", "valuename", "flags", ""],
         param_types: [Unused, Int, String, String, Int, Unused],
-        effects: REGISTRY,
+        effects: REGISTRY.acting_outside(),
         description: "DeleteRegValue/Key",
         category: "registry",
     },
@@ -1036,7 +1045,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // value gets.
         param_names: ["root", "keyname", "itemname", "data", "kind", "value_type"],
         param_types: [Int, String, String, String, Int, Int],
-        effects: REGISTRY,
+        effects: REGISTRY.acting_outside(),
         description: "WriteRegStr/DWORD/Bin",
         category: "registry",
     },
@@ -1045,7 +1054,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 5,
         param_names: ["output", "root", "keyname", "itemname", "want_dword", ""],
         param_types: [OUT, Int, String, String, Int, Unused],
-        effects: REGISTRY,
+        effects: REGISTRY.acting_outside(),
         description: "ReadRegStr/DWORD",
         category: "registry",
     },
@@ -1054,7 +1063,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 5,
         param_names: ["output", "root", "keyname", "index", "enum_keys", ""],
         param_types: [OUT, Int, String, Number, Int, Unused],
-        effects: REGISTRY,
+        effects: REGISTRY.acting_outside(),
         description: "RegEnumKey/Value",
         category: "registry",
     },
@@ -1063,7 +1072,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 1,
         param_names: ["handle", "", "", "", "", ""],
         param_types: [IN, Unused, Unused, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "FileClose",
         category: "file_io",
     },
@@ -1072,7 +1081,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 4,
         param_names: ["handle_out", "openmode", "createmode", "name", "", ""],
         param_types: [OUT, Int, Int, String, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "FileOpen",
         category: "file_io",
     },
@@ -1081,7 +1090,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 3,
         param_names: ["handle", "string", "write_char", "", "", ""],
         param_types: [IN, String, Int, Unused, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "FileWrite",
         category: "file_io",
     },
@@ -1091,7 +1100,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // Nothing is written when asked for fewer than one character.
         param_names: ["handle", "output", "max_len", "read_char", "", ""],
         param_types: [IN, MAY_OUT, Number, Int, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "FileRead",
         category: "file_io",
     },
@@ -1101,7 +1110,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // The position is written only when the handle is not empty.
         param_names: ["handle", "position", "offset", "method", "", ""],
         param_types: [IN, MAY_OUT, Number, Int, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "FileSeek",
         category: "file_io",
     },
@@ -1110,7 +1119,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 1,
         param_names: ["handle", "", "", "", "", ""],
         param_types: [IN, Unused, Unused, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "FindClose",
         category: "file_io",
     },
@@ -1119,7 +1128,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 2,
         param_names: ["output", "handle", "", "", "", ""],
         param_types: [OUT, IN, Unused, Unused, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "FindNext",
         category: "file_io",
     },
@@ -1128,7 +1137,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 3,
         param_names: ["output", "handle_out", "filespec", "", "", ""],
         param_types: [OUT, OUT, String, Unused, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "FindFirst",
         category: "file_io",
     },
@@ -1139,7 +1148,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // name alone is not a full path.
         param_names: ["name", "data_offset", "icon_size", "full_path", "", ""],
         param_types: [String, DataOffset, Int, String, Unused, Unused],
-        effects: FAILS_REPORTING,
+        effects: FAILS_REPORTING.acting_outside(),
         description: "WriteUninstaller",
         category: "file",
     },
@@ -1149,7 +1158,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // One opcode, several commands; `param_layout` says which.
         param_names: ["section", "value", "op", "flags_changed", "text", ""],
         param_types: [Number, Number, Int, Int, String, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "SectionSet/GetText/Flags",
         category: "misc",
     },
@@ -1159,7 +1168,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // One opcode, four commands; `param_layout` says which.
         param_names: ["inst_type", "value", "set", "current", "", ""],
         param_types: [Number, Unused, Int, Int, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "InstTypeSet/GetFlags",
         category: "misc",
     },
@@ -1170,7 +1179,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // address and a size-and-offset spec to read memory with.
         param_names: ["", "output", "source", "op", "spec", ""],
         param_types: [Unused, OUT, String, Int, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "GetOSInfo/GetKnownFolderPath",
         category: "misc",
     },
@@ -1189,7 +1198,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // Zero is `LockWindow on`.
         param_names: ["unlock", "", "", "", "", ""],
         param_types: [Int, Unused, Unused, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "Lock/unlock window updates",
         category: "ui",
     },
@@ -1198,7 +1207,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 4,
         param_names: ["handle", "string", "write_char", "bom", "", ""],
         param_types: [IN, String, Int, Int, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "FileWriteUTF16LE",
         category: "file_io",
     },
@@ -1207,7 +1216,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 4,
         param_names: ["handle", "output", "max_len", "read_char", "", ""],
         param_types: [IN, MAY_OUT, Number, Int, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "FileReadUTF16LE",
         category: "file_io",
     },
@@ -1219,7 +1228,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 2,
         param_names: ["type", "text", "", "", "", ""],
         param_types: [Int, String, Unused, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "LogText/LogSet (log-enabled builds only)",
         category: "misc",
     },
@@ -1229,7 +1238,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 2,
         param_names: ["result", "process", "", "", "", ""],
         param_types: [OUT, String, Unused, Unused, Unused, Unused],
-        effects: NONE,
+        effects: NONE.acting_outside(),
         description: "FindProc (Park fork)",
         category: "process",
     },
@@ -1240,7 +1249,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         // failure.
         param_names: ["output", "file", "", "", "", ""],
         param_types: [MAY_OUT, String, Unused, Unused, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "GetFontVersion (Park fork)",
         category: "file",
     },
@@ -1249,7 +1258,7 @@ pub static OPCODES: [OpcodeInfo; 74] = [
         param_count: 2,
         param_names: ["output", "file", "", "", "", ""],
         param_types: [MAY_OUT, String, Unused, Unused, Unused, Unused],
-        effects: FAILS,
+        effects: FAILS.acting_outside(),
         description: "GetFontName (Park fork)",
         category: "file",
     },
@@ -1633,6 +1642,41 @@ mod tests {
             assert_eq!(layout.count, info.param_count, "{}", info.mnemonic);
             assert_eq!(layout.effects, info.effects, "{}", info.mnemonic);
         }
+    }
+
+    /// **Only the script's own computation stays inside.** Everything else
+    /// reads or changes something the script does not own - a file, a key, a
+    /// window, the installer's own interface - and may not be merged, moved or
+    /// dropped as a computation could be.
+    #[test]
+    fn only_the_scripts_own_computation_stays_inside() {
+        let inside: Vec<&str> = OPCODES
+            .iter()
+            .filter(|op| !op.effects.outside)
+            .map(|op| op.mnemonic)
+            .collect();
+        assert_eq!(
+            inside,
+            [
+                "EW_INVALID_OPCODE",
+                "EW_RET",
+                "EW_NOP",
+                "EW_QUIT",
+                "EW_CALL",
+                "EW_SETFLAG",
+                "EW_IFFLAG",
+                "EW_GETFLAG",
+                "EW_STRLEN",
+                "EW_ASSIGNVAR",
+                "EW_STRCMP",
+                "EW_INTCMP",
+                "EW_INTOP",
+                "EW_INTFMT",
+                "EW_PUSHPOP",
+                "EW_RESERVEDOPCODE",
+            ]
+        );
+        assert!(SET_BRANDING_IMAGE.effects.outside);
     }
 
     #[test]
