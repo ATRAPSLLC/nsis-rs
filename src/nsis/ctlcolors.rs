@@ -7,7 +7,7 @@
 
 use crate::{
     error::Error,
-    util::{read_i32_le, read_u32_le},
+    util::{Blob, read_i32_le, read_u32_le},
 };
 
 // Color flags (CC_*).
@@ -31,7 +31,7 @@ pub const CC_FLAGSMASK: u32 = 0x1F;
 /// detected installer target platform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CtlColors<'a> {
-    bytes: &'a [u8],
+    bytes: Blob<&'a [u8]>,
     is_64bit: bool,
 }
 
@@ -55,11 +55,11 @@ impl<'a> CtlColors<'a> {
             });
         }
         Ok(Self {
-            bytes: data.get(..Self::SIZE_32).ok_or(Error::TooShort {
+            bytes: Blob(data.get(..Self::SIZE_32).ok_or(Error::TooShort {
                 expected: Self::SIZE_32,
                 actual: data.len(),
                 context: "CtlColors32",
-            })?,
+            })?),
             is_64bit: false,
         })
     }
@@ -78,11 +78,11 @@ impl<'a> CtlColors<'a> {
             });
         }
         Ok(Self {
-            bytes: data.get(..Self::SIZE_64).ok_or(Error::TooShort {
+            bytes: Blob(data.get(..Self::SIZE_64).ok_or(Error::TooShort {
                 expected: Self::SIZE_64,
                 actual: data.len(),
                 context: "CtlColors64",
-            })?,
+            })?),
             is_64bit: true,
         })
     }
@@ -106,32 +106,32 @@ impl<'a> CtlColors<'a> {
     /// Returns the text color (COLORREF).
     #[inline]
     pub fn text(&self) -> u32 {
-        read_u32_le(self.bytes, 0)
+        read_u32_le(&self.bytes, 0)
     }
 
     /// Returns the background color (COLORREF).
     #[inline]
     pub fn bkc(&self) -> u32 {
-        read_u32_le(self.bytes, 4)
+        read_u32_le(&self.bytes, 4)
     }
 
     /// Returns the color flags (`CC_*`).
     pub fn flags(&self) -> u32 {
         if self.is_64bit {
             // 64-bit layout: text(4), bkc(4), bkb(8), lbStyle(4), bkmode(4), flags(4)
-            read_u32_le(self.bytes, 28)
+            read_u32_le(&self.bytes, 28)
         } else {
             // 32-bit layout: text(4), bkc(4), lbStyle(4), bkb(4), bkmode(4), flags(4)
-            read_u32_le(self.bytes, 20)
+            read_u32_le(&self.bytes, 20)
         }
     }
 
     /// Returns the background mode.
     pub fn bkmode(&self) -> i32 {
         if self.is_64bit {
-            read_i32_le(self.bytes, 24)
+            read_i32_le(&self.bytes, 24)
         } else {
-            read_i32_le(self.bytes, 16)
+            read_i32_le(&self.bytes, 16)
         }
     }
 

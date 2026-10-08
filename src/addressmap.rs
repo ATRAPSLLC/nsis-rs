@@ -29,7 +29,7 @@ use crate::{error::Error, util::Blob};
 /// ```
 #[derive(Debug)]
 pub struct PeOverlay<'a> {
-    file: Blob<'a>,
+    file: Blob<&'a [u8]>,
     overlay_offset: usize,
 }
 

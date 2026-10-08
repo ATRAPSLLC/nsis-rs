@@ -32,7 +32,7 @@ pub const MAX_ENTRY_OFFSETS: usize = 6;
 /// | 0x18 | `offsets[5]` | Parameter 5 |
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry<'a> {
-    bytes: Blob<'a>,
+    bytes: Blob<&'a [u8]>,
 }
 
 impl<'a> Entry<'a> {
@@ -76,7 +76,7 @@ impl<'a> Entry<'a> {
     /// Returns the opcode index (`EW_*`).
     #[inline]
     pub fn which(&self) -> i32 {
-        read_i32_le(self.bytes.0, 0)
+        read_i32_le(&self.bytes, 0)
     }
 
     /// Returns the parameter at the given index (0..5).
@@ -88,10 +88,7 @@ impl<'a> Entry<'a> {
             return 0;
         }
         // index < MAX_ENTRY_OFFSETS = 6, so 4 + 4*index <= 24, no overflow.
-        read_i32_le(
-            self.bytes.0,
-            4_usize.saturating_add(index.saturating_mul(4)),
-        )
+        read_i32_le(&self.bytes, 4_usize.saturating_add(index.saturating_mul(4)))
     }
 
     /// Returns all 6 parameter offsets.
@@ -100,12 +97,12 @@ impl<'a> Entry<'a> {
     #[inline]
     pub fn offsets(&self) -> [i32; MAX_ENTRY_OFFSETS] {
         [
-            read_i32_le(self.bytes.0, 4),
-            read_i32_le(self.bytes.0, 8),
-            read_i32_le(self.bytes.0, 12),
-            read_i32_le(self.bytes.0, 16),
-            read_i32_le(self.bytes.0, 20),
-            read_i32_le(self.bytes.0, 24),
+            read_i32_le(&self.bytes, 4),
+            read_i32_le(&self.bytes, 8),
+            read_i32_le(&self.bytes, 12),
+            read_i32_le(&self.bytes, 16),
+            read_i32_le(&self.bytes, 20),
+            read_i32_le(&self.bytes, 24),
         ]
     }
 }
@@ -113,7 +110,7 @@ impl<'a> Entry<'a> {
 /// Iterator over NSIS entries in the entry block.
 #[derive(Debug)]
 pub struct EntryIter<'a> {
-    data: Blob<'a>,
+    data: Blob<&'a [u8]>,
     remaining: usize,
     offset: usize,
     stride: usize,

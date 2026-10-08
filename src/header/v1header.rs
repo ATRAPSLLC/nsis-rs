@@ -35,7 +35,7 @@ use crate::{
     error::Error,
     header::blockheader::{BLOCKS_NUM, BlockType},
     nsis::{entry::Entry, section::Section},
-    util::read_i32_le,
+    util::{Blob, read_i32_le},
 };
 
 /// Offsets of the fields this crate reads, in bytes from the start of the
@@ -106,7 +106,7 @@ impl V1HeaderKind {
 /// See the [module documentation](self) for the layout and its provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct V1Header<'a> {
-    bytes: &'a [u8],
+    bytes: Blob<&'a [u8]>,
     /// Which of the two structs this is.
     kind: V1HeaderKind,
     /// Byte offset of the section table, always [`V1Header::SIZE`].
@@ -180,7 +180,7 @@ impl<'a> V1Header<'a> {
         }
 
         Ok(Self {
-            bytes,
+            bytes: Blob(bytes),
             kind,
             sections_offset,
             entries_offset,
@@ -199,7 +199,7 @@ impl<'a> V1Header<'a> {
     #[inline]
     pub fn num_sections(&self) -> i32 {
         match self.kind {
-            V1HeaderKind::Installer => read_i32_le(self.bytes, field::NUM_SECTIONS),
+            V1HeaderKind::Installer => read_i32_le(&self.bytes, field::NUM_SECTIONS),
             V1HeaderKind::Uninstaller => 0,
         }
     }
@@ -211,8 +211,8 @@ impl<'a> V1Header<'a> {
     pub fn uninstall_code(&self) -> Option<(i32, i32)> {
         (self.kind == V1HeaderKind::Uninstaller).then(|| {
             (
-                read_i32_le(self.bytes, field::UNINSTALL_CODE),
-                read_i32_le(self.bytes, field::UNINSTALL_CODE_SIZE),
+                read_i32_le(&self.bytes, field::UNINSTALL_CODE),
+                read_i32_le(&self.bytes, field::UNINSTALL_CODE_SIZE),
             )
         })
     }
@@ -220,7 +220,7 @@ impl<'a> V1Header<'a> {
     /// Returns the number of entries in the instruction table.
     #[inline]
     pub fn num_entries(&self) -> i32 {
-        read_i32_le(self.bytes, field::NUM_ENTRIES)
+        read_i32_le(&self.bytes, field::NUM_ENTRIES)
     }
 
     /// Returns the tables as the `(offset, count)` pairs a 2.x block table
@@ -264,13 +264,13 @@ impl<'a> V1Header<'a> {
     /// Returns the installer name.
     #[inline]
     pub fn name_ptr(&self) -> i32 {
-        read_i32_le(self.bytes, field::NAME_PTR)
+        read_i32_le(&self.bytes, field::NAME_PTR)
     }
 
     /// Returns the window caption.
     #[inline]
     pub fn caption_ptr(&self) -> i32 {
-        read_i32_le(self.bytes, field::CAPTION_PTR)
+        read_i32_le(&self.bytes, field::CAPTION_PTR)
     }
 
     /// Returns the default install directory.
@@ -309,7 +309,7 @@ impl<'a> V1Header<'a> {
     #[inline]
     fn installer_field(&self, offset: usize) -> i32 {
         match self.kind {
-            V1HeaderKind::Installer => read_i32_le(self.bytes, offset),
+            V1HeaderKind::Installer => read_i32_le(&self.bytes, offset),
             V1HeaderKind::Uninstaller => -1,
         }
     }
@@ -329,7 +329,7 @@ impl<'a> V1Header<'a> {
                 // The installer-only run restarts the numbering.
                 field::CODE_ON_PREV_PAGE.wrapping_sub(5 * 4)
             };
-            *slot = read_i32_le(self.bytes, base.wrapping_add(i.wrapping_mul(4)));
+            *slot = read_i32_le(&self.bytes, base.wrapping_add(i.wrapping_mul(4)));
         }
         out
     }

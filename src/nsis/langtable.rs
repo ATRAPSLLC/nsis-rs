@@ -26,7 +26,7 @@ use crate::{
 /// | 0x08+ | `string_ptrs[]` | Variable-length array of string table offsets |
 #[derive(Debug, Clone)]
 pub struct LangTable<'a> {
-    bytes: Blob<'a>,
+    bytes: Blob<&'a [u8]>,
     entry_size: usize,
 }
 
@@ -67,13 +67,13 @@ impl<'a> LangTable<'a> {
     /// Returns the Windows language identifier (LANGID).
     #[inline]
     pub fn lang_id(&self) -> u16 {
-        read_u16_le(self.bytes.0, 0)
+        read_u16_le(&self.bytes, 0)
     }
 
     /// Returns the dialog string offset.
     #[inline]
     pub fn dlg_offset(&self) -> i32 {
-        read_i32_le(self.bytes.0, 4)
+        read_i32_le(&self.bytes, 4)
     }
 
     /// Returns the string table offset at the given index in the string pointer array.
@@ -83,7 +83,7 @@ impl<'a> LangTable<'a> {
         let offset = index.checked_mul(4)?.checked_add(Self::MIN_SIZE)?;
         let end = offset.checked_add(4)?;
         if end <= self.entry_size {
-            Some(read_i32_le(self.bytes.0, offset))
+            Some(read_i32_le(&self.bytes, offset))
         } else {
             None
         }
@@ -105,7 +105,7 @@ impl<'a> LangTable<'a> {
 /// Iterator over language tables in the language table block.
 #[derive(Debug)]
 pub struct LangTableIter<'a> {
-    data: &'a [u8],
+    data: Blob<&'a [u8]>,
     remaining: usize,
     offset: usize,
     entry_size: usize,
@@ -118,7 +118,7 @@ impl<'a> LangTableIter<'a> {
     /// per-entry byte size from the common header.
     pub fn new(data: &'a [u8], count: usize, entry_size: usize) -> Self {
         Self {
-            data,
+            data: Blob(data),
             remaining: count,
             offset: 0,
             entry_size,
@@ -134,7 +134,7 @@ impl<'a> Iterator for LangTableIter<'a> {
             return None;
         }
         self.remaining = self.remaining.saturating_sub(1);
-        let Some(slice) = self.data.get(self.offset..) else {
+        let Some(slice) = self.data.0.get(self.offset..) else {
             return Some(Err(Error::TooShort {
                 expected: self.offset.saturating_add(self.entry_size),
                 actual: self.data.len(),

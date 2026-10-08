@@ -5,6 +5,15 @@ All notable changes to the `nsis` crate are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `Debug` output no longer dumps raw bytes. Every type that holds a byte
+  buffer, `NsisInstaller` and `Decoded` included, now prints its length and a
+  hex preview: every byte up to 32, the first 16 beyond that. Formatting an
+  `NsisInstaller` with `{:?}` drops from hundreds of kilobytes to about one.
+
 ## [0.5.0] - 2026-09-26
 
 ### Added

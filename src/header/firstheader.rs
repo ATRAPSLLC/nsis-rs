@@ -8,7 +8,7 @@
 
 use crate::{
     error::Error,
-    util::{read_i32_le, read_u32_le},
+    util::{Blob, read_i32_le, read_u32_le},
 };
 
 /// NSIS standard signature: `0xDEADBEEF`.
@@ -79,7 +79,7 @@ pub const FH_V1_FLAGS_SILENT: u32 = 0x04;
 /// | 0x18 | `length_of_all_following_data` | Total size including CRC |
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FirstHeader<'a> {
-    bytes: &'a [u8],
+    bytes: Blob<&'a [u8]>,
 }
 
 impl<'a> FirstHeader<'a> {
@@ -110,7 +110,7 @@ impl<'a> FirstHeader<'a> {
             actual: data.len(),
             context: "FirstHeader",
         })?;
-        let header = Self { bytes };
+        let header = Self { bytes: Blob(bytes) };
 
         // Validate siginfo.
         let sig = header.siginfo();
@@ -141,22 +141,22 @@ impl<'a> FirstHeader<'a> {
     /// Returns the raw flags field.
     #[inline]
     pub fn flags(&self) -> u32 {
-        read_u32_le(self.bytes, 0)
+        read_u32_le(&self.bytes, 0)
     }
 
     /// Returns the signature info field (should be `0xDEADBEEF` or `0xDEADBEED`).
     #[inline]
     pub fn siginfo(&self) -> u32 {
-        read_u32_le(self.bytes, 4)
+        read_u32_le(&self.bytes, 4)
     }
 
     /// Returns the three `nsinst` magic values.
     #[inline]
     pub fn nsinst(&self) -> [u32; 3] {
         [
-            read_u32_le(self.bytes, 8),
-            read_u32_le(self.bytes, 12),
-            read_u32_le(self.bytes, 16),
+            read_u32_le(&self.bytes, 8),
+            read_u32_le(&self.bytes, 12),
+            read_u32_le(&self.bytes, 16),
         ]
     }
 
@@ -166,7 +166,7 @@ impl<'a> FirstHeader<'a> {
     /// immediately follows the FirstHeader.
     #[inline]
     pub fn length_of_header(&self) -> i32 {
-        read_i32_le(self.bytes, 20)
+        read_i32_le(&self.bytes, 20)
     }
 
     /// Returns the total size of all data following (and including) the FirstHeader.
@@ -175,7 +175,7 @@ impl<'a> FirstHeader<'a> {
     /// and optional CRC.
     #[inline]
     pub fn length_of_all_following_data(&self) -> i32 {
-        read_i32_le(self.bytes, 24)
+        read_i32_le(&self.bytes, 24)
     }
 
     /// Returns `true` if this is an uninstaller (`FH_FLAGS_UNINSTALL`).

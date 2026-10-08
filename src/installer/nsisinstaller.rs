@@ -227,11 +227,11 @@ struct HeaderStrings {
 #[derive(Debug)]
 pub struct NsisInstaller<'a> {
     /// The original file bytes (borrowed).
-    file: Blob<'a>,
+    file: Blob<&'a [u8]>,
     /// Byte offset of the FirstHeader within the file.
     first_header_file_offset: usize,
     /// Decompressed header data (owned).
-    header_data: Vec<u8>,
+    header_data: Blob<Vec<u8>>,
     /// Detected compression method.
     compression: CompressionMethod,
     /// Detected compression mode.
@@ -257,7 +257,7 @@ pub struct NsisInstaller<'a> {
     /// (everything after the header in the solid decompressed stream).
     /// Each file entry is framed with a 4-byte length prefix.
     /// `EW_EXTRACTFILE` `data_offset` values are byte positions into this buffer.
-    solid_data: Vec<u8>,
+    solid_data: Blob<Vec<u8>>,
     /// Outcome of decompressing the solid stream (solid mode only).
     solid_status: SolidStatus,
     /// Parsed block offsets and counts: (offset_in_header, item_count).
@@ -678,7 +678,7 @@ impl<'a> NsisInstaller<'a> {
         Ok(Self {
             file: Blob(file),
             first_header_file_offset,
-            header_data,
+            header_data: Blob(header_data),
             compression,
             mode,
             version,
@@ -687,7 +687,7 @@ impl<'a> NsisInstaller<'a> {
             first_header_flags: first_header.flags(),
             is_legacy,
             data_block_offset,
-            solid_data,
+            solid_data: Blob(solid_data),
             solid_status,
             blocks,
             common_flags,
@@ -1739,7 +1739,7 @@ impl<'a> NsisInstaller<'a> {
 /// ```
 #[derive(Debug)]
 pub struct NsisInstallerBuilder<'a> {
-    file: Blob<'a>,
+    file: Blob<&'a [u8]>,
     max_decompressed_size: usize,
 }
 
