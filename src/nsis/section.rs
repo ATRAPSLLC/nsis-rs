@@ -13,7 +13,7 @@
 
 use crate::{
     error::Error,
-    util::{read_i32_le, read_u32_le},
+    util::{Blob, read_i32_le, read_u32_le},
 };
 
 /// Section is selected by default.
@@ -79,7 +79,7 @@ const DFS_RO: u32 = 0x4000_0000;
 /// | 0x18+ | `name[]` | Inline name buffer (variable length) |
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Section<'a> {
-    bytes: &'a [u8],
+    bytes: Blob<&'a [u8]>,
     is_unicode: bool,
     layout: SectionLayout,
 }
@@ -129,11 +129,11 @@ impl<'a> Section<'a> {
             });
         }
         Ok(Self {
-            bytes: data.get(..size).ok_or(Error::TooShort {
+            bytes: Blob(data.get(..size).ok_or(Error::TooShort {
                 expected: size,
                 actual: data.len(),
                 context: "Section",
-            })?,
+            })?),
             is_unicode,
             layout,
         })
@@ -142,7 +142,7 @@ impl<'a> Section<'a> {
     /// Returns the string table offset for the section name.
     #[inline]
     pub fn name_ptr(&self) -> i32 {
-        read_i32_le(self.bytes, 0)
+        read_i32_le(&self.bytes, 0)
     }
 
     /// Returns the install types bitmask.
@@ -151,8 +151,8 @@ impl<'a> Section<'a> {
     #[inline]
     pub fn install_types(&self) -> u32 {
         match self.layout {
-            SectionLayout::Modern => read_u32_le(self.bytes, 4),
-            SectionLayout::Nsis1 => read_u32_le(self.bytes, 4) & !(DFS_SET | DFS_RO),
+            SectionLayout::Modern => read_u32_le(&self.bytes, 4),
+            SectionLayout::Nsis1 => read_u32_le(&self.bytes, 4) & !(DFS_SET | DFS_RO),
         }
     }
 
@@ -165,9 +165,9 @@ impl<'a> Section<'a> {
     #[inline]
     pub fn flags(&self) -> u32 {
         match self.layout {
-            SectionLayout::Modern => read_u32_le(self.bytes, 8),
+            SectionLayout::Modern => read_u32_le(&self.bytes, 8),
             SectionLayout::Nsis1 => {
-                let state = read_u32_le(self.bytes, 4);
+                let state = read_u32_le(&self.bytes, 4);
                 let mut flags = 0;
                 if state & DFS_SET != 0 {
                     flags |= SF_SELECTED;
@@ -183,19 +183,19 @@ impl<'a> Section<'a> {
     /// Returns the entry index where this section's code starts.
     #[inline]
     pub fn code(&self) -> i32 {
-        read_i32_le(self.bytes, self.field_offset(12, 8))
+        read_i32_le(&self.bytes, self.field_offset(12, 8))
     }
 
     /// Returns the number of entries (instructions) in this section.
     #[inline]
     pub fn code_size(&self) -> i32 {
-        read_i32_le(self.bytes, self.field_offset(16, 12))
+        read_i32_le(&self.bytes, self.field_offset(16, 12))
     }
 
     /// Returns the estimated disk space usage in kilobytes.
     #[inline]
     pub fn size_kb(&self) -> i32 {
-        read_i32_le(self.bytes, self.field_offset(20, 16))
+        read_i32_le(&self.bytes, self.field_offset(20, 16))
     }
 
     /// Picks between the two layouts' offsets for a field they share.
@@ -301,7 +301,7 @@ impl<'a> Section<'a> {
 /// Iterator over NSIS sections in a section block.
 #[derive(Debug)]
 pub struct SectionIter<'a> {
-    data: &'a [u8],
+    data: Blob<&'a [u8]>,
     remaining: usize,
     offset: usize,
     section_size: usize,
@@ -328,7 +328,7 @@ impl<'a> SectionIter<'a> {
         layout: SectionLayout,
     ) -> Self {
         Self {
-            data,
+            data: Blob(data),
             remaining: count,
             offset: 0,
             section_size,
@@ -346,7 +346,7 @@ impl<'a> Iterator for SectionIter<'a> {
             return None;
         }
         self.remaining = self.remaining.saturating_sub(1);
-        let Some(slice) = self.data.get(self.offset..) else {
+        let Some(slice) = self.data.0.get(self.offset..) else {
             return Some(Err(Error::TooShort {
                 expected: self.offset.saturating_add(self.section_size),
                 actual: self.data.len(),

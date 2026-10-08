@@ -7,7 +7,7 @@
 
 use crate::{
     error::Error,
-    util::{read_i32_le, read_u32_le},
+    util::{Blob, read_i32_le, read_u32_le},
 };
 
 // Page types (PWP_*).
@@ -98,7 +98,7 @@ pub const PF_DIR_NO_BTN_DISABLE: u32 = 1024;
 /// | 0x3C | `parms[4]` | Additional parameter 4 |
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Page<'a> {
-    bytes: &'a [u8],
+    bytes: Blob<&'a [u8]>,
 }
 
 impl<'a> Page<'a> {
@@ -119,24 +119,24 @@ impl<'a> Page<'a> {
             });
         }
         Ok(Self {
-            bytes: data.get(..Self::SIZE).ok_or(Error::TooShort {
+            bytes: Blob(data.get(..Self::SIZE).ok_or(Error::TooShort {
                 expected: Self::SIZE,
                 actual: data.len(),
                 context: "Page",
-            })?,
+            })?),
         })
     }
 
     /// Returns the dialog resource ID.
     #[inline]
     pub fn dlg_id(&self) -> i32 {
-        read_i32_le(self.bytes, 0)
+        read_i32_le(&self.bytes, 0)
     }
 
     /// Returns the window procedure type (maps to [`PageType`]).
     #[inline]
     pub fn wndproc_id(&self) -> i32 {
-        read_i32_le(self.bytes, 4)
+        read_i32_le(&self.bytes, 4)
     }
 
     /// Returns the page type derived from `wndproc_id`.
@@ -148,66 +148,66 @@ impl<'a> Page<'a> {
     /// Returns the pre-creation callback entry index (-1 if unused).
     #[inline]
     pub fn prefunc(&self) -> i32 {
-        read_i32_le(self.bytes, 8)
+        read_i32_le(&self.bytes, 8)
     }
 
     /// Returns the pre-show callback entry index (-1 if unused).
     #[inline]
     pub fn showfunc(&self) -> i32 {
-        read_i32_le(self.bytes, 12)
+        read_i32_le(&self.bytes, 12)
     }
 
     /// Returns the leave callback entry index (-1 if unused).
     #[inline]
     pub fn leavefunc(&self) -> i32 {
-        read_i32_le(self.bytes, 16)
+        read_i32_le(&self.bytes, 16)
     }
 
     /// Returns the page flags (`PF_*`).
     #[inline]
     pub fn flags(&self) -> u32 {
-        read_u32_le(self.bytes, 20)
+        read_u32_le(&self.bytes, 20)
     }
 
     /// Returns the string table offset for the page caption.
     #[inline]
     pub fn caption(&self) -> i32 {
-        read_i32_le(self.bytes, 24)
+        read_i32_le(&self.bytes, 24)
     }
 
     /// Returns the string table offset for the Back button text.
     #[inline]
     pub fn back(&self) -> i32 {
-        read_i32_le(self.bytes, 28)
+        read_i32_le(&self.bytes, 28)
     }
 
     /// Returns the string table offset for the Next button text.
     #[inline]
     pub fn next(&self) -> i32 {
-        read_i32_le(self.bytes, 32)
+        read_i32_le(&self.bytes, 32)
     }
 
     /// Returns the string table offset for the clicknext text.
     #[inline]
     pub fn clicknext(&self) -> i32 {
-        read_i32_le(self.bytes, 36)
+        read_i32_le(&self.bytes, 36)
     }
 
     /// Returns the string table offset for the Cancel button text.
     #[inline]
     pub fn cancel(&self) -> i32 {
-        read_i32_le(self.bytes, 40)
+        read_i32_le(&self.bytes, 40)
     }
 
     /// Returns the additional parameters array.
     #[inline]
     pub fn parms(&self) -> [i32; 5] {
         [
-            read_i32_le(self.bytes, 44),
-            read_i32_le(self.bytes, 48),
-            read_i32_le(self.bytes, 52),
-            read_i32_le(self.bytes, 56),
-            read_i32_le(self.bytes, 60),
+            read_i32_le(&self.bytes, 44),
+            read_i32_le(&self.bytes, 48),
+            read_i32_le(&self.bytes, 52),
+            read_i32_le(&self.bytes, 56),
+            read_i32_le(&self.bytes, 60),
         ]
     }
 }
@@ -215,7 +215,7 @@ impl<'a> Page<'a> {
 /// Iterator over NSIS pages in the page block.
 #[derive(Debug)]
 pub struct PageIter<'a> {
-    data: &'a [u8],
+    data: Blob<&'a [u8]>,
     remaining: usize,
     offset: usize,
 }
@@ -224,7 +224,7 @@ impl<'a> PageIter<'a> {
     /// Creates a new page iterator over the page block data.
     pub fn new(data: &'a [u8], count: usize) -> Self {
         Self {
-            data,
+            data: Blob(data),
             remaining: count,
             offset: 0,
         }
@@ -239,7 +239,7 @@ impl<'a> Iterator for PageIter<'a> {
             return None;
         }
         self.remaining = self.remaining.saturating_sub(1);
-        let slice = self.data.get(self.offset..).unwrap_or(&[]);
+        let slice = self.data.0.get(self.offset..).unwrap_or(&[]);
         let result = Page::parse(slice);
         self.offset = self.offset.saturating_add(Page::SIZE);
         Some(result)

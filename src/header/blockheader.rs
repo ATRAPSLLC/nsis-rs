@@ -8,7 +8,7 @@
 
 use crate::{
     error::Error,
-    util::{read_i32_le, read_u32_le},
+    util::{Blob, read_i32_le, read_u32_le},
 };
 
 /// Number of block headers in an NSIS common header.
@@ -79,14 +79,16 @@ impl BlockType {
 /// | 0x04 | `num` | Item count (or total byte length for strings) |
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockHeader<'a> {
-    bytes: &'a [u8],
+    bytes: Blob<&'a [u8]>,
 }
 
 /// An all-zero `BlockHeader` (offset = 0, num = 0).
 ///
 /// Used as a default placeholder when constructing arrays of block headers
 /// before parsing populates them.
-pub const EMPTY_BLOCK: BlockHeader<'static> = BlockHeader { bytes: &[0u8; 8] };
+pub const EMPTY_BLOCK: BlockHeader<'static> = BlockHeader {
+    bytes: Blob(&[0u8; 8]),
+};
 
 impl<'a> BlockHeader<'a> {
     /// The on-disk size of a block header in bytes.
@@ -106,18 +108,18 @@ impl<'a> BlockHeader<'a> {
             });
         }
         Ok(Self {
-            bytes: data.get(..Self::SIZE).ok_or(Error::TooShort {
+            bytes: Blob(data.get(..Self::SIZE).ok_or(Error::TooShort {
                 expected: Self::SIZE,
                 actual: data.len(),
                 context: "BlockHeader",
-            })?,
+            })?),
         })
     }
 
     /// Returns the byte offset of this block within the decompressed header.
     #[inline]
     pub fn offset(&self) -> u32 {
-        read_u32_le(self.bytes, 0)
+        read_u32_le(&self.bytes, 0)
     }
 
     /// Returns the item count for this block.
@@ -126,7 +128,7 @@ impl<'a> BlockHeader<'a> {
     /// ([`BlockType::Strings`]), this is the total byte length of the string table.
     #[inline]
     pub fn num(&self) -> i32 {
-        read_i32_le(self.bytes, 4)
+        read_i32_le(&self.bytes, 4)
     }
 }
 

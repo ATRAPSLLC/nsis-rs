@@ -587,7 +587,7 @@ pub fn read_nsis_string(context: &StringTable<'_>, offset: usize) -> Result<Nsis
 #[derive(Debug, Clone, Copy)]
 pub struct StringTable<'a> {
     /// The decompressed header block.
-    data: Blob<'a>,
+    data: Blob<&'a [u8]>,
     /// Byte offset of the string table within `data`.
     base: usize,
     encoding: StringEncoding,

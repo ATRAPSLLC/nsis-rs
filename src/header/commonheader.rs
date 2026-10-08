@@ -13,7 +13,7 @@
 use crate::{
     error::Error,
     header::blockheader::{BLOCKS_NUM, BlockHeader, BlockType, EMPTY_BLOCK},
-    util::{read_i32_le, read_u32_le},
+    util::{Blob, read_i32_le, read_u32_le},
 };
 
 // Common header flags (CH_FLAGS_*).
@@ -74,7 +74,7 @@ pub const COMMON_HEADER_MIN_SIZE: usize = 4 + (BLOCKS_NUM * BlockHeader::SIZE);
 /// of the decompressed data), callback entry indices, and install configuration.
 #[derive(Debug)]
 pub struct CommonHeader<'a> {
-    bytes: &'a [u8],
+    bytes: Blob<&'a [u8]>,
     blocks: [BlockHeader<'a>; BLOCKS_NUM],
 }
 
@@ -147,7 +147,7 @@ impl<'a> CommonHeader<'a> {
         }
 
         Ok(Self {
-            bytes: data,
+            bytes: Blob(data),
             blocks,
         })
     }
@@ -155,7 +155,7 @@ impl<'a> CommonHeader<'a> {
     /// Returns the common header flags (`CH_FLAGS_*`).
     #[inline]
     pub fn flags(&self) -> u32 {
-        read_u32_le(self.bytes, 0)
+        read_u32_le(&self.bytes, 0)
     }
 
     /// Returns the block header for the given block type.
@@ -183,7 +183,7 @@ impl<'a> CommonHeader<'a> {
     #[inline]
     pub fn install_reg_rootkey(&self) -> i32 {
         if self.bytes.len() >= 72 {
-            read_i32_le(self.bytes, 68)
+            read_i32_le(&self.bytes, 68)
         } else {
             0
         }
@@ -205,7 +205,7 @@ impl<'a> CommonHeader<'a> {
         // offset 96: lb_fg (4)
         // offset 100: langtable_size (4)
         if self.bytes.len() >= 104 {
-            read_i32_le(self.bytes, 100)
+            read_i32_le(&self.bytes, 100)
         } else {
             0
         }
@@ -215,7 +215,7 @@ impl<'a> CommonHeader<'a> {
     pub fn code_on_init(&self) -> i32 {
         // offset 108 in standard layout (after license_bg at 104).
         if self.bytes.len() >= 112 {
-            read_i32_le(self.bytes, 108)
+            read_i32_le(&self.bytes, 108)
         } else {
             -1
         }
@@ -224,7 +224,7 @@ impl<'a> CommonHeader<'a> {
     /// Returns the callback entry index for `.onInstSuccess` (-1 if unused).
     pub fn code_on_inst_success(&self) -> i32 {
         if self.bytes.len() >= 116 {
-            read_i32_le(self.bytes, 112)
+            read_i32_le(&self.bytes, 112)
         } else {
             -1
         }
@@ -233,7 +233,7 @@ impl<'a> CommonHeader<'a> {
     /// Returns the callback entry index for `.onInstFailed` (-1 if unused).
     pub fn code_on_inst_failed(&self) -> i32 {
         if self.bytes.len() >= 120 {
-            read_i32_le(self.bytes, 116)
+            read_i32_le(&self.bytes, 116)
         } else {
             -1
         }
@@ -242,7 +242,7 @@ impl<'a> CommonHeader<'a> {
     /// Returns the callback entry index for `.onUserAbort` (-1 if unused).
     pub fn code_on_user_abort(&self) -> i32 {
         if self.bytes.len() >= 124 {
-            read_i32_le(self.bytes, 120)
+            read_i32_le(&self.bytes, 120)
         } else {
             -1
         }
@@ -251,7 +251,7 @@ impl<'a> CommonHeader<'a> {
     /// Returns the callback entry index for `.onGUIInit` (-1 if unused).
     pub fn code_on_gui_init(&self) -> i32 {
         if self.bytes.len() >= 128 {
-            read_i32_le(self.bytes, 124)
+            read_i32_le(&self.bytes, 124)
         } else {
             -1
         }
@@ -260,7 +260,7 @@ impl<'a> CommonHeader<'a> {
     /// Returns the callback entry index for `.onGUIEnd` (-1 if unused).
     pub fn code_on_gui_end(&self) -> i32 {
         if self.bytes.len() >= 132 {
-            read_i32_le(self.bytes, 128)
+            read_i32_le(&self.bytes, 128)
         } else {
             -1
         }
@@ -269,7 +269,7 @@ impl<'a> CommonHeader<'a> {
     /// Returns the callback entry index for `.onMouseOverSection` (-1 if unused).
     pub fn code_on_mouse_over_section(&self) -> i32 {
         if self.bytes.len() >= 136 {
-            read_i32_le(self.bytes, 132)
+            read_i32_le(&self.bytes, 132)
         } else {
             -1
         }
@@ -278,7 +278,7 @@ impl<'a> CommonHeader<'a> {
     /// Returns the callback entry index for `.onVerifyInstDir` (-1 if unused).
     pub fn code_on_verify_inst_dir(&self) -> i32 {
         if self.bytes.len() >= 140 {
-            read_i32_le(self.bytes, 136)
+            read_i32_le(&self.bytes, 136)
         } else {
             -1
         }
@@ -287,7 +287,7 @@ impl<'a> CommonHeader<'a> {
     /// Returns the callback entry index for `.onSelChange` (-1 if unused).
     pub fn code_on_sel_change(&self) -> i32 {
         if self.bytes.len() >= 144 {
-            read_i32_le(self.bytes, 140)
+            read_i32_le(&self.bytes, 140)
         } else {
             -1
         }
@@ -296,7 +296,7 @@ impl<'a> CommonHeader<'a> {
     /// Returns the callback entry index for `.onRebootFailed` (-1 if unused).
     pub fn code_on_reboot_failed(&self) -> i32 {
         if self.bytes.len() >= 148 {
-            read_i32_le(self.bytes, 144)
+            read_i32_le(&self.bytes, 144)
         } else {
             -1
         }
@@ -362,7 +362,7 @@ impl<'a> CommonHeader<'a> {
     /// built without a feature simply ends before them.
     fn field_at(&self, offset: usize) -> Option<i32> {
         let end = offset.checked_add(4)?;
-        (self.bytes.len() >= end).then(|| read_i32_le(self.bytes, offset))
+        (self.bytes.len() >= end).then(|| read_i32_le(&self.bytes, offset))
     }
 
     /// Returns a slice of the decompressed header data for the given block type.

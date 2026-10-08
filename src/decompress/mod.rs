@@ -18,7 +18,10 @@ pub mod lzma;
 
 use core::fmt;
 
-use crate::{error::Error, util::read_u32_le};
+use crate::{
+    error::Error,
+    util::{Blob, read_u32_le},
+};
 
 /// Identifies the compression algorithm used by an NSIS installer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +157,7 @@ pub enum DecodeLimit {
 ///
 /// Returned by [`decompress_block`] and the per-codec entry points. Callers
 /// that only want the bytes can take [`data`](Self::data) and ignore the flag.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Decoded {
     /// The decompressed bytes.
     pub data: Vec<u8>,
@@ -165,6 +168,15 @@ pub struct Decoded {
     /// [`DecodeLimit::Capped`] rejects an over-budget stream with
     /// [`Error::OutputTooLarge`] instead of returning a partial buffer.
     pub truncated: bool,
+}
+
+impl fmt::Debug for Decoded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Decoded")
+            .field("data", &Blob(&self.data))
+            .field("truncated", &self.truncated)
+            .finish()
+    }
 }
 
 impl Decoded {
