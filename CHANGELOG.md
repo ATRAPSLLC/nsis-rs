@@ -7,12 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Language strings resolve to their text. `NsisInstaller::lang_string` reads
+  string `n` of a language table, and `resolve_lang_strings` replaces the
+  `$(LSTR_n)` references in any string read with `read_string` - an
+  instruction operand, a section name - with one language's text. Strings
+  that name other language strings, such as the default caption
+  `$(^Name) Setup`, resolve in turn; cycles, nesting past 16 levels and more
+  than 1024 expansions stay as `$(LSTR_n)`. The same pair is on `StringTable`
+  as `read_lang` and `resolve_lang`.
+- `LangTable::is_rtl`.
+
 ### Changed
 
 - `Debug` output no longer dumps raw bytes. Every type that holds a byte
   buffer, `NsisInstaller` and `Decoded` included, now prints its length and a
   hex preview: every byte up to 32, the first 16 beyond that. Formatting an
   `NsisInstaller` with `{:?}` drops from hundreds of kilobytes to about one.
+- `NsisInstaller::read_string` documents what every offset means, negative
+  ones included, and the errors it returns.
+- `lzma-rust2` 0.21.
 
 ### Fixed
 
@@ -22,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_decompressed_size` said. The dictionary is now capped at the output
   budget, which no stream within that budget can exceed, so memory follows the
   budget and every valid stream decodes as before.
+- `LangTable` read its fields two bytes off. The table is packed - `lang_id`,
+  `dlg_offset`, `rtl`, then the strings from byte 10 - but was read with
+  padding after `lang_id`, so `string_ptr` and `dlg_offset` returned garbage
+  for every installer. `LangTable::MIN_SIZE` is now 10.
 
 ## [0.5.0] - 2026-09-26
 

@@ -18,7 +18,7 @@ pub mod v1;
 use core::fmt;
 use std::borrow::Cow;
 
-use crate::{error::Error, strings::ansi::AnsiCodeRange, util::Blob};
+use crate::{error::Error, nsis::langtable::LangTable, strings::ansi::AnsiCodeRange, util::Blob};
 
 /// Identifies the string encoding used by an NSIS installer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -596,6 +596,18 @@ pub struct StringTable<'a> {
     internal_vars: u16,
 }
 
+/// Deepest chain of language strings [`StringTable::resolve_lang`] follows.
+///
+/// A real script nests one or two deep (a caption naming `$(^Name)`); the
+/// limit is what keeps a crafted chain from exhausting the stack.
+const MAX_LANG_DEPTH: usize = 16;
+
+/// Most references [`StringTable::resolve_lang`] expands for one string.
+///
+/// Depth alone does not bound the work: a string that names the next one
+/// twice, sixteen deep, would expand 65 536 times.
+const MAX_LANG_EXPANSIONS: usize = 1024;
+
 impl<'a> StringTable<'a> {
     /// Creates a string table view over a decompressed header block.
     ///
@@ -691,6 +703,101 @@ impl<'a> StringTable<'a> {
             .base
             .saturating_add((offset as usize).saturating_mul(self.char_size()));
         read_nsis_string(self, byte_offset)
+    }
+
+    /// Reads language string `index` of `table`, resolving the language
+    /// strings it refers to.
+    ///
+    /// See [`resolve_lang`](Self::resolve_lang) for how references are
+    /// resolved.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidStringOffset`] if `table` has no string
+    /// `index`, or if it or a string it refers to lies beyond the table.
+    pub fn read_lang(&self, table: &LangTable<'_>, index: u16) -> Result<NsisString, Error> {
+        let offset = table
+            .string_ptr(usize::from(index))
+            .ok_or(Error::InvalidStringOffset {
+                offset: !u32::from(index),
+            })?;
+        let mut out = NsisString {
+            segments: Vec::new(),
+        };
+        let mut budget = MAX_LANG_EXPANSIONS;
+        self.expand_lang(
+            &self.read(offset)?,
+            table,
+            &mut vec![index],
+            &mut budget,
+            &mut out,
+        )?;
+        Ok(out)
+    }
+
+    /// Returns `string` with each [`StringSegment::LangString`] replaced by
+    /// that string's text in `table`.
+    ///
+    /// The installer resolves these at run time from the table of the
+    /// language it runs in, so the result is what a user of that language
+    /// sees. A language string may itself refer to others - the default
+    /// caption is `$(^Name) Setup` - and those are resolved too.
+    ///
+    /// A reference is left in place, rendering as `$(LSTR_n)`, when `table`
+    /// has no string `n`, when it refers back to a string it is part of, or
+    /// past 16 nested references or 1024 expansions. Real scripts reach none of these; a crafted one reaches
+    /// them instead of exhausting the stack or the time budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidStringOffset`] if a string it refers to lies
+    /// beyond the table.
+    pub fn resolve_lang(
+        &self,
+        string: &NsisString,
+        table: &LangTable<'_>,
+    ) -> Result<NsisString, Error> {
+        let mut out = NsisString {
+            segments: Vec::with_capacity(string.segments.len()),
+        };
+        let mut budget = MAX_LANG_EXPANSIONS;
+        self.expand_lang(string, table, &mut Vec::new(), &mut budget, &mut out)?;
+        Ok(out)
+    }
+
+    /// Appends `string` to `out`, expanding its language-string references.
+    ///
+    /// `path` holds the references being expanded, innermost last.
+    fn expand_lang(
+        &self,
+        string: &NsisString,
+        table: &LangTable<'_>,
+        path: &mut Vec<u16>,
+        budget: &mut usize,
+        out: &mut NsisString,
+    ) -> Result<(), Error> {
+        for segment in &string.segments {
+            let target = match segment {
+                StringSegment::LangString(index)
+                    if *budget > 0 && path.len() < MAX_LANG_DEPTH && !path.contains(index) =>
+                {
+                    table
+                        .string_ptr(usize::from(*index))
+                        .map(|offset| (*index, offset))
+                }
+                _ => None,
+            };
+            let Some((index, offset)) = target else {
+                out.segments.push(segment.clone());
+                continue;
+            };
+            *budget = budget.saturating_sub(1);
+            let nested = self.read(offset)?;
+            path.push(index);
+            self.expand_lang(&nested, table, path, budget, out)?;
+            path.pop();
+        }
+        Ok(())
     }
 
     /// Returns the index of `$INSTDIR` in this installer's variable layout.
@@ -1531,6 +1638,153 @@ mod tests {
                 }
             ),
             "$_ERROR_UNSUPPORTED_VALUE_REGISTRY_(MediaPathUnexpanded)"
+        );
+    }
+
+    /// One piece of a string for [`lang_fixture`]: text, or a reference to
+    /// language string `n`.
+    enum Part {
+        Text(&'static str),
+        Lang(u16),
+    }
+
+    /// Builds a Unicode string table holding `strings`, and a language table
+    /// whose string `n` is `strings[n]`.
+    fn lang_fixture(strings: &[&[Part]]) -> (Vec<u8>, Vec<u8>) {
+        // Offset 0 is the empty string every table starts with.
+        let mut table = vec![0u8, 0];
+        let mut lang = Vec::new();
+        lang.extend_from_slice(&1033u16.to_le_bytes());
+        lang.extend_from_slice(&[0; 8]); // dlg_offset, rtl
+        for parts in strings {
+            lang.extend_from_slice(&((table.len() / 2) as i32).to_le_bytes());
+            for part in *parts {
+                match part {
+                    Part::Text(text) => {
+                        for unit in text.encode_utf16() {
+                            table.extend_from_slice(&unit.to_le_bytes());
+                        }
+                    }
+                    Part::Lang(n) => {
+                        let arg = 0x8080 | (n & 0x7F) | ((n >> 7) & 0x7F) << 8;
+                        table.extend_from_slice(&1u16.to_le_bytes());
+                        table.extend_from_slice(&arg.to_le_bytes());
+                    }
+                }
+            }
+            table.extend_from_slice(&[0, 0]);
+        }
+        (table, lang)
+    }
+
+    fn unicode_table(data: &[u8]) -> StringTable<'_> {
+        StringTable::new(
+            data,
+            0,
+            StringEncoding::Unicode,
+            AnsiCodeRange::Nsis3,
+            DEFAULT_INTERNAL_VARS,
+        )
+    }
+
+    #[test]
+    fn read_lang_resolves_nested_references() {
+        use Part::{Lang, Text};
+        let (data, lang) = lang_fixture(&[&[Text("Lang Test")], &[Lang(0), Text(" Setup")]]);
+        let table = unicode_table(&data);
+        let lang = LangTable::parse(&lang, lang.len()).unwrap();
+
+        assert_eq!(
+            table.read_lang(&lang, 1).unwrap().to_string(),
+            "Lang Test Setup"
+        );
+        let operand = NsisString {
+            segments: vec![StringSegment::LangString(1)],
+        };
+        assert_eq!(
+            table.resolve_lang(&operand, &lang).unwrap().to_string(),
+            "Lang Test Setup"
+        );
+    }
+
+    #[test]
+    fn read_lang_rejects_a_missing_index() {
+        let (data, lang) = lang_fixture(&[&[Part::Text("only")]]);
+        let table = unicode_table(&data);
+        let lang = LangTable::parse(&lang, lang.len()).unwrap();
+        // The offset names it as an operand would: `-(5 + 1)`.
+        assert_eq!(
+            table.read_lang(&lang, 5),
+            Err(Error::InvalidStringOffset {
+                offset: (-6i32) as u32
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_lang_leaves_unresolvable_references() {
+        use Part::{Lang, Text};
+        let (data, lang) = lang_fixture(&[
+            &[Text("self "), Lang(0)],
+            &[Lang(2)],
+            &[Lang(1)],
+            &[Text("missing "), Lang(9)],
+        ]);
+        let table = unicode_table(&data);
+        let lang = LangTable::parse(&lang, lang.len()).unwrap();
+
+        assert_eq!(
+            table.read_lang(&lang, 0).unwrap().to_string(),
+            "self $(LSTR_0)"
+        );
+        assert_eq!(table.read_lang(&lang, 1).unwrap().to_string(), "$(LSTR_1)");
+        assert_eq!(
+            table.read_lang(&lang, 3).unwrap().to_string(),
+            "missing $(LSTR_9)"
+        );
+    }
+
+    #[test]
+    fn resolve_lang_stops_at_the_depth_limit() {
+        // String n names string n + 1, a hundred deep.
+        let parts: Vec<[Part; 1]> = (1..=100).map(|n| [Part::Lang(n)]).collect();
+        let strings: Vec<&[Part]> = parts.iter().map(|p| &p[..]).collect();
+        let (data, lang) = lang_fixture(&strings);
+        let table = unicode_table(&data);
+        let lang = LangTable::parse(&lang, lang.len()).unwrap();
+
+        let out = table.read_lang(&lang, 0).unwrap();
+        assert_eq!(
+            out.segments,
+            [StringSegment::LangString(MAX_LANG_DEPTH as u16)]
+        );
+    }
+
+    #[test]
+    fn resolve_lang_stops_at_the_expansion_budget() {
+        use Part::{Lang, Text};
+        // String n names string n + 1 twice, so a full expansion of string 0
+        // would read 2^15 copies of the last one.
+        let parts: Vec<[Part; 2]> = (1..16).map(|n| [Lang(n), Lang(n)]).collect();
+        let mut strings: Vec<&[Part]> = parts.iter().map(|p| &p[..]).collect();
+        let last = [Text("x")];
+        strings.push(&last);
+        let (data, lang) = lang_fixture(&strings);
+        let table = unicode_table(&data);
+        let lang = LangTable::parse(&lang, lang.len()).unwrap();
+
+        let out = table.read_lang(&lang, 0).unwrap();
+        let resolved = out
+            .segments
+            .iter()
+            .filter(|s| matches!(s, StringSegment::Literal(_)))
+            .count();
+        assert!(resolved > 0 && resolved <= MAX_LANG_EXPANSIONS);
+        assert!(
+            out.segments
+                .iter()
+                .any(|s| matches!(s, StringSegment::LangString(_))),
+            "the references past the budget stay in place"
         );
     }
 

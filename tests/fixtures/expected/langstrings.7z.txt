@@ -1,0 +1,28 @@
+
+7-Zip 24.08 (x64) : Copyright (c) 1999-2024 Igor Pavlov : 2024-08-11
+
+Scanning the drive for archives:
+1 file, 39358 bytes (39 KiB)
+
+Listing archive: langstrings.exe
+
+--
+Path = langstrings.exe
+Type = Nsis
+Physical Size = 39358
+Method = LZMA:23
+Solid = +
+Headers Size = 6402
+Embedded Stub Size = 37888
+SubType = NSIS-3 Unicode
+
+----------
+Path = payload.txt
+Size = 
+Packed Size = 1466
+Modified = 2026-01-01 00:00:00.0000000
+Attributes = 
+Method = LZMA:23
+Solid = +
+Offset = 0
+
