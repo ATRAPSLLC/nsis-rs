@@ -776,6 +776,26 @@ fn truncated_solid_decompress_reports_the_budget() {
     }
 }
 
+#[test]
+fn small_budget_truncates_rather_than_failing() {
+    // The LZMA dictionary is capped at the budget, so the decoder must not
+    // run ahead of it: a match reaching back past the capped dictionary would
+    // fail as `dist overflow` where the stream is merely over budget. Budgets
+    // below the read chunk size are where that would show.
+    let data = fixture_bytes("full_featured.exe");
+    for budget in [4096, 5000, 8192] {
+        let inst = NsisInstaller::builder(data)
+            .max_decompressed_size(budget)
+            .parse()
+            .expect("header parsing must still succeed over budget");
+        assert_eq!(
+            inst.solid_status(),
+            &SolidStatus::Truncated { limit: budget },
+            "budget {budget}"
+        );
+    }
+}
+
 /// Copies a fixture and corrupts the tail of its solid stream, leaving the
 /// header region - which decodes with an exact bound and stops early - intact.
 fn fixture_with_corrupt_solid_tail(name: &str) -> Vec<u8> {

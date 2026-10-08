@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hex preview: every byte up to 32, the first 16 beyond that. Formatting an
   `NsisInstaller` with `{:?}` drops from hundreds of kilobytes to about one.
 
+### Fixed
+
+- LZMA decoding no longer allocates whatever dictionary the stream declares.
+  The decoder reserved the full declared size before reading a byte, so a
+  crafted installer could make parsing claim nearly 4 GiB of memory whatever
+  `max_decompressed_size` said. The dictionary is now capped at the output
+  budget, which no stream within that budget can exceed, so memory follows the
+  budget and every valid stream decodes as before.
+
 ## [0.5.0] - 2026-09-26
 
 ### Added
