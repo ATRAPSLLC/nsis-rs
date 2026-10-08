@@ -3,13 +3,14 @@
 //! NSIS LZMA streams begin with a properties byte (typically `0x5D` for
 //! lc=3, lp=0, pb=2) followed by a 4-byte little-endian dictionary size.
 
-use std::io::{self, Cursor, Write};
+use std::io::{self, Cursor, Read, Write};
 
 use lzma_rust2::LzmaReader;
 
 use crate::{
     decompress::{DecodeLimit, Decoded},
     error::Error,
+    util::read_u32_le,
 };
 
 /// A [`Write`] sink that appends to an in-memory buffer but refuses to grow
@@ -80,9 +81,11 @@ pub fn decompress_lzma(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded,
         });
     }
 
+    let max_output = limit.size();
+
     // Build a standard LZMA header for lzma-rs:
     // Bytes 0:   properties byte (from NSIS stream)
-    // Bytes 1-4: dictionary size (from NSIS stream)
+    // Bytes 1-4: dictionary size (from NSIS stream, capped at the budget)
     // Bytes 5-12: uncompressed size. Only `Exact` knows it; the unknown-size
     //             variants use the 0xFFFF... sentinel and rely on the EOS marker.
     let uncompressed_size_bytes: [u8; 8] = match limit {
@@ -92,11 +95,12 @@ pub fn decompress_lzma(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded,
 
     let mut lzma_header = Vec::with_capacity(compressed.len().saturating_add(8));
     let (props, body) = compressed.split_at(5);
-    lzma_header.extend_from_slice(props); // props + dict_size
+    lzma_header.extend_from_slice(props.get(..1).unwrap_or_default());
+    lzma_header
+        .extend_from_slice(&capped_dict_size(read_u32_le(props, 1), max_output).to_le_bytes());
     lzma_header.extend_from_slice(&uncompressed_size_bytes);
     lzma_header.extend_from_slice(body);
 
-    let max_output = limit.size();
     let capacity = max_output.min(compressed.len().saturating_mul(4));
     let mut writer = LimitedWriter {
         buf: Vec::with_capacity(capacity),
@@ -109,13 +113,17 @@ pub fn decompress_lzma(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded,
     // consumes the LZMA alone header we built above); trailing bytes after
     // the marker (CRC, padding) are left unread, so unlike lzma-rs there is
     // no "more bytes are available" error to tolerate.
-    let mut reader =
-        LzmaReader::new_mem_limit(Cursor::new(&lzma_header), u32::MAX, None).map_err(|e| {
-            Error::DecompressionFailed {
-                method: "lzma",
-                detail: e.to_string(),
-            }
-        })?;
+    //
+    // The decoder may produce one byte past the budget, which is all the sink
+    // needs to see the stream does not fit, and no more: its dictionary is
+    // capped at the budget, so a match decoded further ahead could reach back
+    // past it and fail as corrupt data instead of as an exhausted budget.
+    let mut reader = LzmaReader::new_mem_limit(Cursor::new(&lzma_header), u32::MAX, None)
+        .map_err(|e| Error::DecompressionFailed {
+            method: "lzma",
+            detail: e.to_string(),
+        })?
+        .take((max_output as u64).saturating_add(1));
     match io::copy(&mut reader, &mut writer) {
         Ok(_) => {}
         Err(e) => {
@@ -145,6 +153,22 @@ pub fn decompress_lzma(compressed: &[u8], limit: DecodeLimit) -> Result<Decoded,
         data: writer.buf,
         truncated: writer.overflowed,
     })
+}
+
+/// Caps a stream's declared dictionary size at the output budget.
+///
+/// The declared size is the input's to choose, and the decoder allocates and
+/// zero-fills all of it before reading a byte, so a 69-byte stream declaring a
+/// 4 GiB dictionary claims 4 GiB whatever the budget. A match can never reach
+/// back past the output produced so far, so no stream that fits the budget
+/// uses more dictionary than the budget: the cap bounds memory without
+/// changing what any such stream decodes to. lzma-rust2 makes the same cut
+/// itself when the uncompressed size is known.
+///
+/// That holds only while the decoder stays within the budget, which is why
+/// [`decompress_lzma`] never reads more than one byte past it.
+fn capped_dict_size(declared: u32, max_output: usize) -> u32 {
+    declared.min(u32::try_from(max_output).unwrap_or(u32::MAX))
 }
 
 #[cfg(test)]
@@ -203,6 +227,28 @@ mod tests {
         // The real output is 1430 bytes; a 512-byte cap must be rejected.
         let result = decompress_lzma(NSIS_EOS_STREAM, DecodeLimit::Capped(512));
         assert!(matches!(result, Err(Error::OutputTooLarge { limit: 512 })));
+    }
+
+    #[test]
+    fn dict_size_capped_at_budget() {
+        assert_eq!(
+            capped_dict_size(u32::MAX, 64 * 1024 * 1024),
+            64 * 1024 * 1024
+        );
+        assert_eq!(
+            capped_dict_size(8 * 1024 * 1024, 64 * 1024 * 1024),
+            8 * 1024 * 1024
+        );
+        assert_eq!(capped_dict_size(u32::MAX, usize::MAX), u32::MAX);
+    }
+
+    #[test]
+    fn stream_decodes_with_dict_capped_to_its_own_size() {
+        // The fixture declares 8 MiB; a budget of exactly its 1430-byte output
+        // caps the dictionary below that and must decode the same bytes.
+        let full = decompress_lzma(NSIS_EOS_STREAM, DecodeLimit::Capped(64 * 1024 * 1024)).unwrap();
+        let tight = decompress_lzma(NSIS_EOS_STREAM, DecodeLimit::Capped(1430)).unwrap();
+        assert_eq!(tight, full);
     }
 
     #[test]
