@@ -935,6 +935,46 @@ mod tests {
         assert_eq!(find_first.param_types[1], OUT);
     }
 
+    /// **1.x keeps the same line between computation and the world**: flow,
+    /// the flags, strings, integers and the stack stay inside, and every
+    /// other instruction acts outside the script.
+    #[test]
+    fn only_the_scripts_own_computation_stays_inside() {
+        let inside: Vec<&str> = OPCODES_V1
+            .iter()
+            .filter(|op| !op.effects.outside)
+            .map(|op| op.mnemonic)
+            .collect();
+        assert_eq!(
+            inside,
+            [
+                "EW_INVALID_OPCODE",
+                "EW_RET",
+                "EW_NOP",
+                "EW_QUIT",
+                "EW_CALL",
+                "EW_SETSFCONTEXT",
+                "EW_SETWINDOWCLOSE",
+                "EW_IFERRORS",
+                "EW_STRLEN",
+                "EW_ASSIGNVAR",
+                "EW_STRCMP",
+                "EW_INTCMP",
+                "EW_INTCMPU",
+                "EW_INTOP",
+                "EW_INTFMT",
+                "EW_PUSHPOP",
+                "EW_IFREBOOTFLAG",
+                "EW_SETREBOOTFLAG",
+                "EW_GETLABELADDR",
+                "EW_GETFUNCTIONADDR",
+            ]
+        );
+        // `SetDetailsPrint` only sets a flag; `DetailPrint` writes the window.
+        assert!(!layout_v1(6, [-1, 2, 0, 0, 0, 0]).effects.outside);
+        assert!(layout_v1(6, [9, 0, 0, 0, 0, 0]).effects.outside);
+    }
+
     /// Resolves a 1.x layout.
     fn layout_v1(which: u32, values: [i32; 6]) -> ParamLayout {
         param_layout_v1(which, lookup_v1(which).expect("known"), &values)
