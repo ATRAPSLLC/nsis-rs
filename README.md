@@ -13,10 +13,11 @@ Built for **malware analysis** and **reverse engineering**.
 - Decompress header blocks (deflate, bzip2, LZMA) in solid and non-solid modes
 - Iterate sections, pages, bytecode entries, language tables, and embedded files
 - Decode NSIS string tables (ANSI, Unicode, Jim Park fork encoding) with variable and shell folder resolution
+- Resolve language strings to a chosen language's text, including the installer `Name` and caption
 - Version-aware opcode lookup across every NSIS generation - see below
 - Operand semantics for every instruction, taken from the NSIS runtime: which
-  variables it reads and writes, which flags it sets, its stack effect and
-  whether it can end the script
+  variables it reads and writes, which flags it sets, its stack effect,
+  whether it can end the script and whether it acts outside the script
 - High-level analysis iterators for security-relevant operations:
   plugin calls, process execution, registry modifications, shortcut creation, uninstaller stubs
 - Extract and decompress embedded files
