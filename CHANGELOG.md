@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than 1024 expansions stay as `$(LSTR_n)`. The same pair is on `StringTable`
   as `read_lang` and `resolve_lang`.
 - `LangTable::is_rtl`.
+- `Effects::outside`: whether an instruction acts on anything outside the
+  script's own state - the file system, the registry, windows, processes, the
+  environment, the installer's interface. Only flow, the flag, string and
+  integer instructions and the string stack stay inside; a consumer may merge
+  or drop those as computations, and must keep every other.
 
 ### Changed
 

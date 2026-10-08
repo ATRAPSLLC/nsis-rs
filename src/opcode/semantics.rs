@@ -309,6 +309,16 @@ pub struct Effects {
     pub plugin: bool,
     /// Whether it can end the code it runs in.
     pub terminates: Termination,
+    /// Whether it acts on anything outside the script's own state - the file
+    /// system, the registry, windows, processes, the environment, the
+    /// installer's own interface - by reading it or by changing it.
+    ///
+    /// An instruction that does not computes only on the variables, flags and
+    /// stack it names, so the same inputs give the same result and nothing
+    /// else observes it. One that does may not be repeated, dropped or merged
+    /// with another however little of its result the script reads: a second
+    /// `IfFileExists` can see a file a `File` between them wrote.
+    pub outside: bool,
 }
 
 impl Effects {
@@ -322,7 +332,15 @@ impl Effects {
         stack: StackEffect::None,
         plugin: false,
         terminates: Termination::Never,
+        outside: false,
     };
+
+    /// Returns these effects acting outside the script ([`Self::outside`]).
+    #[must_use]
+    pub const fn acting_outside(mut self) -> Self {
+        self.outside = true;
+        self
+    }
 
     /// Returns these effects with `flags` added to the flags read.
     #[must_use]
