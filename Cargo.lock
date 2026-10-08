@@ -126,7 +126,7 @@ checksum = "fde178a3caf126c440fa15628147772d8ee590a39477d711353fbe2e58a73a5b"
 
 [[package]]
 name = "nsis"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "flate2",
  "goblin",

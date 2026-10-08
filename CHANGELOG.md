@@ -5,7 +5,7 @@ All notable changes to the `nsis` crate are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-10-07
 
 ### Added
 
@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Breaking: `Effects` gains an `outside` field, which breaks code that builds
+  or destructures it exhaustively. `LangTable::MIN_SIZE` is 10, not 8 (see
+  Fixed).
 - `Debug` output no longer dumps raw bytes. Every type that holds a byte
   buffer, `NsisInstaller` and `Decoded` included, now prints its length and a
   hex preview: every byte up to 32, the first 16 beyond that. Formatting an
@@ -571,6 +574,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of the `nsis` crate.
 
+[0.6.0]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.3.1...v0.4.0
