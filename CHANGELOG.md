@@ -5,6 +5,34 @@ All notable changes to the `nsis` crate are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-11-12
+
+### Added
+
+- `opcode::command::script_command` names the `.nsi` script command an entry
+  compiles from, read from its resolved opcode and operands the way the
+  compiler (`tokens.cpp`, `CEXEBuild::doCommand`) wrote them: `EW_CREATEDIR`
+  is `SetOutPath` or `CreateDirectory`, `EW_PUSHPOP` is `Push`, `Pop` or
+  `Exch`, `EW_SETFLAG` names its flag's command. The answer is a
+  `ScriptCommand`: `One` command, `Either` a usual command and the
+  alternatives the installer cannot tell apart (`StrCpy` or
+  `GetFunctionAddress`, `Return` or `FunctionEnd`), or `Internal` for an
+  opcode no command writes. It takes the `OpcodeInfo` the resolver chose,
+  never the raw number, so 1.x, Park and logging builds are not misnamed; a
+  1.x entry whose command turns on an operand stays unnamed rather than
+  guessed.
+- `NsisInstaller::format_entry_in_language` formats an entry as
+  `format_entry_with_analysis` does, with each `$(LSTR_n)` operand read in
+  one language table's text. A reference the table cannot resolve stays
+  `$(LSTR_n)`.
+
+### Changed
+
+- Dependencies updated: `lzma-rust2` 0.25 (from 0.21), `flate2` 1.1.11, and
+  `proptest` 1.12 for tests, with lockfile updates to `libc`, `log`, `rustix`
+  and `unicode-ident`. `lzma-rust2` is used only internally, so the public
+  API is unaffected.
+
 ## [0.6.0] - 2026-10-07
 
 ### Added
@@ -574,6 +602,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of the `nsis` crate.
 
+[0.6.1]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/ATRAPSLLC/nsis-rs/compare/v0.4.0...v0.4.1
