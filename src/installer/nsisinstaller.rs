@@ -1303,7 +1303,7 @@ impl<'a> NsisInstaller<'a> {
     /// Writes directly into the caller's buffer, for rendering many entries
     /// without a `String` per line. Existing contents of `out` are kept.
     pub fn write_entry_params(&self, out: &mut String, entry: &Entry<'_>) {
-        self.write_params(out, entry, None);
+        self.write_params(out, entry, None, None);
     }
 
     /// Formats an entry as a single script-like line with analysis symbols.
@@ -1352,6 +1352,51 @@ impl<'a> NsisInstaller<'a> {
         }
     }
 
+    /// Formats an entry as a single script-like line with analysis symbols,
+    /// each language string in its operands read in `table`'s language.
+    ///
+    /// [`format_entry_with_analysis`](Self::format_entry_with_analysis) shows
+    /// a language string as `$(LSTR_n)`, because the installer picks its
+    /// language when it runs; this reads the line as the installer shows it
+    /// in one language. A reference `table` cannot resolve stays `$(LSTR_n)`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use nsis::NsisInstaller;
+    ///
+    /// let file = std::fs::read("installer.exe").unwrap();
+    /// let installer = NsisInstaller::from_bytes(&file).unwrap();
+    /// let analysis = installer.script_analysis().unwrap();
+    /// // The first table is the installer's default language.
+    /// if let Some(Ok(table)) = installer.lang_tables().next() {
+    ///     for entry in installer.entries().flatten() {
+    ///         println!(
+    ///             "{}",
+    ///             installer.format_entry_in_language(&entry, Some(analysis), &table)
+    ///         );
+    ///     }
+    /// }
+    /// ```
+    pub fn format_entry_in_language(
+        &self,
+        entry: &Entry<'_>,
+        analysis: Option<&ScriptAnalysis>,
+        table: &LangTable<'_>,
+    ) -> String {
+        let mnemonic = self
+            .resolve_opcode(entry.which())
+            .map(|info| info.mnemonic)
+            .unwrap_or("???");
+        let mut params = String::new();
+        self.write_params(&mut params, entry, analysis, Some(table));
+        if params.is_empty() {
+            mnemonic.to_string()
+        } else {
+            format!("{mnemonic} {params}")
+        }
+    }
+
     /// Formats entry parameters with control-flow symbols from an analysis.
     ///
     /// # Arguments
@@ -1386,7 +1431,7 @@ impl<'a> NsisInstaller<'a> {
         entry: &Entry<'_>,
         analysis: &ScriptAnalysis,
     ) {
-        self.write_params(out, entry, Some(analysis));
+        self.write_params(out, entry, Some(analysis), None);
     }
 
     /// Renders an `EW_PUSHPOP` entry's operands, naming the command.
@@ -1395,7 +1440,13 @@ impl<'a> NsisInstaller<'a> {
     /// what its first operand means. This only words the line the way the
     /// disassembly always has: the command up front, and an `Exch` depth of 1
     /// left implicit.
-    fn write_pushpop_params(&self, out: &mut String, layout: &ParamLayout, offsets: &[i32; 6]) {
+    fn write_pushpop_params(
+        &self,
+        out: &mut String,
+        layout: &ParamLayout,
+        offsets: &[i32; 6],
+        language: Option<&LangTable<'_>>,
+    ) {
         let [first, _, depth, ..] = *offsets;
         match layout.types[0] {
             ParamType::Unused => {
@@ -1410,14 +1461,20 @@ impl<'a> NsisInstaller<'a> {
             }
             _ => {
                 out.push_str("op=Push, value=");
-                out.push_str(&self.format_string_param(first));
+                out.push_str(&self.format_string_param(first, language));
             }
         }
     }
 
     /// Renders an entry's operands, annotating jump targets when an analysis
-    /// is supplied.
-    fn write_params(&self, out: &mut String, entry: &Entry<'_>, analysis: Option<&ScriptAnalysis>) {
+    /// is supplied and reading language strings in `language` when one is.
+    fn write_params(
+        &self,
+        out: &mut String,
+        entry: &Entry<'_>,
+        analysis: Option<&ScriptAnalysis>,
+        language: Option<&LangTable<'_>>,
+    ) {
         let offsets = entry.offsets();
         // Some opcodes carry several script commands and choose between them
         // with an operand, so the layout is resolved per entry rather than
@@ -1430,7 +1487,7 @@ impl<'a> NsisInstaller<'a> {
         // Push, Pop and Exch name their command rather than list raw slots.
         // Keyed on the normalized opcode, since a raw 31 is `IntOp` in 1.x.
         if self.normalize_opcode(entry.which()) == opcode::EW_PUSHPOP {
-            self.write_pushpop_params(out, &layout, &offsets);
+            self.write_pushpop_params(out, &layout, &offsets, language);
             return;
         }
         let count = layout.count as usize;
@@ -1466,7 +1523,7 @@ impl<'a> NsisInstaller<'a> {
             match ptype {
                 ParamType::String | ParamType::Number | ParamType::RawString => {
                     separate(out, &mut written);
-                    write_named(out, name, &self.format_string_param(val));
+                    write_named(out, name, &self.format_string_param(val, language));
                 }
                 ParamType::Flag(_) => {
                     separate(out, &mut written);
@@ -1546,9 +1603,16 @@ impl<'a> NsisInstaller<'a> {
 
     /// Renders a string operand: the text it reads back as, quoted, or the
     /// raw value when it reads back as nothing the table holds.
-    fn format_string_param(&self, offset: i32) -> String {
+    fn format_string_param(&self, offset: i32, language: Option<&LangTable<'_>>) -> String {
         match self.read_string(offset) {
-            Ok(value) => format!("{:?}", value.to_string()),
+            Ok(value) => {
+                // A reference the table cannot resolve keeps its `$(LSTR_n)`
+                // form rather than losing the operand.
+                let shown = language
+                    .and_then(|table| self.resolve_lang_strings(&value, table).ok())
+                    .unwrap_or(value);
+                format!("{:?}", shown.to_string())
+            }
             Err(_) => offset.to_string(),
         }
     }

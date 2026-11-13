@@ -10,6 +10,7 @@
 //!
 //! Source: `fileform.h` and `exec.c` from the NSIS source code.
 
+pub mod command;
 pub mod info;
 pub mod semantics;
 pub mod v1;
