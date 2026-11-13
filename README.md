@@ -15,6 +15,9 @@ Built for **malware analysis** and **reverse engineering**.
 - Decode NSIS string tables (ANSI, Unicode, Jim Park fork encoding) with variable and shell folder resolution
 - Resolve language strings to a chosen language's text, including the installer `Name` and caption
 - Version-aware opcode lookup across every NSIS generation - see below
+- Name the `.nsi` script command each entry compiles from (`SetOutPath` or
+  `CreateDirectory`, `Push`, `Pop` or `Exch`), and say so when the installer
+  cannot tell several commands apart
 - Operand semantics for every instruction, taken from the NSIS runtime: which
   variables it reads and writes, which flags it sets, its stack effect,
   whether it can end the script and whether it acts outside the script

@@ -1738,6 +1738,34 @@ fn instruction_operands_resolve_per_language() {
 }
 
 #[test]
+fn an_entry_formats_in_a_language() {
+    // The `DetailPrint "$(Greeting)"` line: `$(LSTR_n)` without a language,
+    // each language's text with one. The control is the line without one.
+    let inst = parse_fixture("langstrings.exe");
+    let analysis = inst.script_analysis().unwrap();
+    let greeting = inst
+        .entries()
+        .map(Result::unwrap)
+        .find(|entry| {
+            inst.format_entry_in_language(entry, Some(analysis), &lang_table(&inst, 1033))
+                .contains("Hello from Language Test")
+        })
+        .expect("the DetailPrint entry");
+    assert!(
+        inst.format_entry_with_analysis(&greeting, analysis)
+            .contains("$(LSTR_"),
+        "without a language the reference stays"
+    );
+    for (id, text) in [
+        (1031, "Hallo von Language Test"),
+        (1037, "Shalom from Language Test"),
+    ] {
+        let line = inst.format_entry_in_language(&greeting, None, &lang_table(&inst, id));
+        assert!(line.contains(text), "language {id}: {line}");
+    }
+}
+
+#[test]
 fn lang_string_rejects_an_index_past_the_table() {
     let inst = parse_fixture("langstrings.exe");
     let english = lang_table(&inst, 1033);
