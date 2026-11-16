@@ -27,13 +27,24 @@ use crate::{error::Error, util::Blob};
 /// println!("Overlay starts at offset 0x{:X}", overlay.overlay_offset());
 /// println!("Overlay size: {} bytes", overlay.overlay().len());
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PeOverlay<'a> {
     file: Blob<&'a [u8]>,
     overlay_offset: usize,
 }
 
 impl<'a> PeOverlay<'a> {
+    /// Locates the overlay region using a known offset.
+    ///
+    /// This is useful when the caller already located the overlay region and
+    /// stored its offset for later use.
+    pub fn new(file: &'a [u8], overlay_offset: usize) -> Self {
+        Self {
+            file: Blob(file),
+            overlay_offset,
+        }
+    }
+
     /// Parses the PE headers and locates the overlay region.
     ///
     /// Returns an error if the file is not a valid PE32 executable or

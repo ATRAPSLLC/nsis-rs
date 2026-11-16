@@ -301,7 +301,10 @@ impl<'a> ExtractedFile<'a> {
     }
 
     /// Reads the 4-byte length prefix for this file's data entry.
-    fn length_prefix(&self) -> Option<(bool, u32)> {
+    ///
+    /// Returns a boolean indicating whether the file is compressed
+    /// and an unsigned 32-bit integer indicating the file size.
+    pub fn length_prefix(&self) -> Option<(bool, u32)> {
         let source = self.data_source();
         let offset = self.source_offset();
         let slice = source.get(offset..)?;
