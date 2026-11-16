@@ -340,6 +340,8 @@ impl<'a> NsisInstaller<'a> {
     pub fn builder(file: &'a [u8]) -> NsisInstallerBuilder<'a> {
         NsisInstallerBuilder {
             file: Blob(file),
+            overlay_offset: None,
+            fh_overlay_offset: None,
             max_decompressed_size: Self::DEFAULT_MAX_DECOMPRESSED_SIZE,
         }
     }
@@ -357,14 +359,31 @@ impl<'a> NsisInstaller<'a> {
     ///
     /// Returns an error if any step fails (not a PE, no overlay, no NSIS
     /// signature, decompression failure, invalid headers).
-    fn parse_with_budget(file: &'a [u8], max_decompressed_size: usize) -> Result<Self, Error> {
+    fn parse_with_budget(
+        file: &'a [u8],
+        overlay_offset: Option<usize>,
+        fh_overlay_offset: Option<usize>,
+        max_decompressed_size: usize,
+    ) -> Result<Self, Error> {
         // Step 1: Locate the PE overlay.
-        let overlay_info = PeOverlay::from_bytes(file)?;
+        let overlay_info = if let Some(overlay_offset) = overlay_offset {
+            PeOverlay::new(file, overlay_offset)
+        } else {
+            PeOverlay::from_bytes(file)?
+        };
         let overlay = overlay_info.overlay();
         let overlay_file_offset = overlay_info.overlay_offset();
 
         // Step 2: Scan for the FirstHeader.
-        let (fh_overlay_offset, first_header) = header::scan_for_first_header(overlay)?;
+        let (fh_overlay_offset, first_header) = if let Some(fh_overlay_offset) = fh_overlay_offset {
+            let first_header_slice = overlay
+                .get(fh_overlay_offset..)
+                .ok_or(Error::SignatureNotFound)?;
+            let first_header = header::FirstHeader::parse(first_header_slice)?;
+            (fh_overlay_offset, first_header)
+        } else {
+            header::scan_for_first_header(overlay)?
+        };
         let first_header_file_offset =
             overlay_file_offset
                 .checked_add(fh_overlay_offset)
@@ -1875,6 +1894,8 @@ impl<'a> NsisInstaller<'a> {
 #[derive(Debug)]
 pub struct NsisInstallerBuilder<'a> {
     file: Blob<&'a [u8]>,
+    overlay_offset: Option<usize>,
+    fh_overlay_offset: Option<usize>,
     max_decompressed_size: usize,
 }
 
@@ -1891,6 +1912,25 @@ impl<'a> NsisInstallerBuilder<'a> {
         self
     }
 
+    /// Stores a known offset to the PE overlay region of an NSIS installer.
+    ///
+    /// This is useful when the caller already has a parsed PE or otherwise
+    /// knows the overlay offset and wants to avoid re-parsing.
+    pub fn with_overlay_offset(mut self, overlay_offset: usize) -> Self {
+        self.overlay_offset = Some(overlay_offset);
+        self
+    }
+
+    /// Stores a known offset to the first header within the
+    /// PE overlay region of an NSIS installer.
+    ///
+    /// This is useful when the caller already has a parsed first header or
+    /// otherwise knows the first header offset and wants to avoid re-parsing.
+    pub fn with_first_header_overlay_offset(mut self, fh_overlay_offset: usize) -> Self {
+        self.fh_overlay_offset = Some(fh_overlay_offset);
+        self
+    }
+
     /// Parses the installer with the configured limits.
     ///
     /// # Errors
@@ -1898,7 +1938,12 @@ impl<'a> NsisInstallerBuilder<'a> {
     /// Returns an error if parsing fails (not a PE, no overlay, no NSIS
     /// signature, decompression failure, invalid headers).
     pub fn parse(self) -> Result<NsisInstaller<'a>, Error> {
-        NsisInstaller::parse_with_budget(self.file.0, self.max_decompressed_size)
+        NsisInstaller::parse_with_budget(
+            self.file.0,
+            self.overlay_offset,
+            self.fh_overlay_offset,
+            self.max_decompressed_size,
+        )
     }
 }
 
